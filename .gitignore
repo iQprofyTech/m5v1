@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Bridge secrets and runtime state
+bridge/config.toml
+bridge/state.json
+bridge/logs/
+
+# PlatformIO
+firmware/.pio/
+firmware/.vscode/
+
+# Flash backups (device-specific, large)
+backups/
+
+# Local Claude settings
+.claude/settings.local.json
