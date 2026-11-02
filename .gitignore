@@ -18,3 +18,6 @@ backups/
 
 # Local Claude settings
 .claude/settings.local.json
+
+# Launcher and SD images (built locally, contain the factory firmware)
+dist/

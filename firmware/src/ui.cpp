@@ -15,7 +15,11 @@ static constexpr size_t kMaxLines = 160;
 // efont covers Latin and Cyrillic, so Russian replies render correctly.
 static const lgfx::IFont* kFont = &fonts::efontJA_12;
 
-static M5Canvas canvas(&M5Cardputer.Display);
+// No parent display here: M5Cardputer.Display is not bound yet during static initialisation
+// (a canvas built with it as parent crashed in pushSprite), so the target is passed at each push.
+static M5Canvas canvas;
+
+static void pushLog() { canvas.pushSprite(&M5Cardputer.Display, 0, kLogY); }
 
 struct Line {
   uint16_t color;
@@ -142,7 +146,7 @@ void uiDrawLog() {
   if (scrollBack > 0) {
     canvas.fillTriangle(kW - 8, kLogH - 2, kW - 2, kLogH - 2, kW - 5, kLogH - 7, TFT_YELLOW);
   }
-  canvas.pushSprite(0, kLogY);
+  pushLog();
 }
 
 void uiDrawInput(const String& text, uint16_t color) {
@@ -189,7 +193,7 @@ void uiDrawMenu(const String& title, const std::vector<String>& items, int selec
     canvas.drawString(items[i], 4, y);
     y += lh;
   }
-  canvas.pushSprite(0, kLogY);
+  pushLog();
 }
 
 void uiDrawLines(const String& title, const std::vector<String>& text) {
@@ -204,5 +208,5 @@ void uiDrawLines(const String& title, const std::vector<String>& text) {
     canvas.drawString(l, 2, y);
     y += lh;
   }
-  canvas.pushSprite(0, kLogY);
+  pushLog();
 }

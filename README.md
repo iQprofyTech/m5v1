@@ -48,7 +48,27 @@ whisper `small` (~480 МБ). Когда Windows спросит про досту
 или смените `permission_mode`. Это осознанный выбор: голосовая команда, распознанная с ошибкой,
 не должна сразу выполнять произвольные команды.
 
-## Прошивка Cardputer
+## Launcher: заводская прошивка и m5v1 на одном устройстве
+
+На устройстве стоит [M5Launcher](https://github.com/bmorcelli/Launcher) 2.9.1, в нём две прошивки:
+заводская M5Stack (компас, GPS и пр., извлечена из резервной копии) и m5v1.
+
+- При включении показывается заставка Launcher; без нажатий запускается последняя выбранная прошивка.
+- **Enter** на заставке — меню Launcher, там можно выбрать другую прошивку.
+- **1** / **2** на заставке — сразу запустить первую / вторую установленную.
+
+Переустановить по USB (сначала войти в меню Launcher: включить и нажать Enter на заставке):
+
+```powershell
+.venv\Scripts\python -I tools\make_sd_images.py backups\<копия>.bin    # dist\sd\*.bin
+.venv\Scripts\python -I tools\launcher_install.py --wait 300 --replace m5v1=dist\sd\m5v1.bin
+```
+
+Те же `.bin` из `dist\sd\` можно положить на SD-карту и поставить из меню Launcher (SD).
+Скрипт ничего не нажимает сам: удалённое нажатие на заставке может попасть в меню и
+запустить выделенную прошивку.
+
+## Прошивка Cardputer (без Launcher)
 
 Заводская прошивка сохранена: `tools\backup_flash.ps1` (копия в `backups\`, не в git).
 Вернуть её: `.venv\Scripts\esptool --port COM3 write-flash 0 backups\<файл>.bin`.
