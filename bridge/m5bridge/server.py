@@ -19,8 +19,10 @@ import hmac
 import itertools
 import logging
 import time
+import wave
 from dataclasses import dataclass, field
 
+import numpy as np
 from aiohttp import web
 
 from . import __version__
@@ -110,6 +112,19 @@ class Bridge:
             log.exception("job %s failed", job.id)
             job.state, job.error = "error", str(exc)[:300] or exc.__class__.__name__
 
+    def _save_last_clip(self, pcm: bytes, rate: int) -> None:
+        """Keep the latest recording as bridge/logs/last_voice.wav for checking the microphone."""
+        try:
+            path = self.cfg.state_path.parent / "logs" / "last_voice.wav"
+            path.parent.mkdir(exist_ok=True)
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(rate)
+                w.writeframes(pcm)
+        except OSError:
+            log.exception("could not save last voice clip")
+
     def _start(self, job: Job, **kwargs) -> None:
         job.task = asyncio.create_task(self._process(job, **kwargs))
 
@@ -145,7 +160,11 @@ class Bridge:
                 raise web.HTTPRequestEntityTooLarge(max_size=limit, actual_size=size)
             chunks.append(chunk)
         pcm = b"".join(chunks)
-        log.info("voice: %.1fs of audio, mode=%s", len(pcm) / 2 / rate, mode)
+        samples = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype="<i2")
+        peak = int(np.abs(samples.astype(np.int32)).max()) if samples.size else 0
+        rms = float(np.sqrt(np.mean(samples.astype(np.float64) ** 2))) if samples.size else 0.0
+        log.info("voice: %.1fs of audio, peak=%d rms=%.0f, mode=%s", samples.size / rate, peak, rms, mode)
+        self._save_last_clip(pcm, rate)
 
         job = self._new_job(mode)
         self._start(job, pcm=pcm, rate=rate, text="", new=request.query.get("new") == "1")

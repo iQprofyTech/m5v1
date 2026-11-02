@@ -212,6 +212,16 @@ static void cancelJob() {
 
 // --- recording --------------------------------------------------------------
 
+// The mic's I2S WS (GPIO43) is also UART0 TX. Without resetting GPIO43/46 first, every
+// sample read the same value (-8) on Cardputer-Adv; with the reset the codec's data arrives.
+static bool micBegin() {
+  M5Cardputer.Speaker.end();  // speaker and mic share the codec
+  gpio_reset_pin(GPIO_NUM_43);
+  gpio_reset_pin(GPIO_NUM_46);
+  delay(5);
+  return M5Cardputer.Mic.begin();
+}
+
 static float chunkLevel(const int16_t* data) {
   int peak = 0;
   for (size_t i = 0; i < kChunk; ++i) peak = std::max(peak, abs(static_cast<int>(data[i])));
@@ -232,8 +242,7 @@ static void startRecording(bool pushToTalk) {
     uiLogAdd(TFT_RED, "Не удалось открыть соединение");
     return;
   }
-  M5Cardputer.Speaker.end();  // speaker and mic share the codec
-  M5Cardputer.Mic.begin();
+  micBegin();
   recording = true;
   recPushToTalk = pushToTalk;
   recCount = recSent = 0;
@@ -503,10 +512,59 @@ static void handleKeyboard() {
   }
 }
 
-// --- USB serial provisioning -----------------------------------------------
+// --- USB serial provisioning and diagnostics --------------------------------
+
+static constexpr uint8_t kEs8311Addr = 0x18;
+
+// "MIC [ms]": record from the built-in mic and print raw level statistics.
+static void micTest(uint32_t ms) {
+  if (!micBegin()) {
+    Serial.println("MIC ERR begin failed");
+    return;
+  }
+  int16_t buf[kChunk];
+  int32_t peak = 0, minV = 32767, maxV = -32768;
+  double sumSq = 0;
+  size_t total = 0;
+  for (uint32_t t = 0; t < ms; t += 100) {
+    if (!M5Cardputer.Mic.record(buf, kChunk, kSampleRate)) continue;
+    while (M5Cardputer.Mic.isRecording()) delay(1);
+    for (size_t i = 0; i < kChunk; ++i) {
+      int32_t v = buf[i];
+      peak = std::max<int32_t>(peak, abs(v));
+      minV = std::min(minV, v);
+      maxV = std::max(maxV, v);
+      sumSq += double(v) * v;
+    }
+    total += kChunk;
+  }
+  M5Cardputer.Mic.end();
+  Serial.printf("MIC board=%d samples=%u peak=%ld min=%ld max=%ld rms=%.1f\n", (int)M5.getBoard(),
+                (unsigned)total, (long)peak, (long)minV, (long)maxV, total ? sqrt(sumSq / total) : 0.0);
+}
+
+static void esDump() {
+  String out = "ES";
+  for (uint8_t reg = 0; reg <= 0x45; ++reg) {
+    char b[8];
+    snprintf(b, sizeof(b), " %02X", M5.In_I2C.readRegister8(kEs8311Addr, reg, 400000));
+    out += b;
+  }
+  Serial.println(out);
+}
 
 static void handleSerialLine(const String& line) {
-  if (line == "PING") {
+  if (line.startsWith("MIC")) {
+    micTest(line.length() > 4 ? line.substring(4).toInt() : 1000);
+  } else if (line == "ESR") {
+    esDump();
+  } else if (line.startsWith("ESW ")) {  // ESW <reg hex> <value hex>
+    int sp = line.indexOf(' ', 4);
+    uint8_t reg = strtol(line.substring(4, sp).c_str(), nullptr, 16);
+    uint8_t val = strtol(line.substring(sp + 1).c_str(), nullptr, 16);
+    bool ok = M5.In_I2C.writeRegister8(kEs8311Addr, reg, val, 400000);
+    Serial.printf("ESW %02X=%02X %s\n", reg, val, ok ? "OK" : "FAIL");
+  } else if (line == "PING") {
     Serial.println("PONG m5v1 " M5V1_VERSION);
   } else if (line == "INFO") {
     Serial.println("INFO " + cfgInfoJson());

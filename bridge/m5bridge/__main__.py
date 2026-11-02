@@ -41,7 +41,7 @@ async def main_async(args) -> None:
         log.info("loading speech model (first run downloads it)...")
         await asyncio.to_thread(transcriber.preload)
 
-    runner = web.AppRunner(app, access_log=None)
+    runner = web.AppRunner(app, access_log=logging.getLogger("aiohttp.access") if args.verbose else None)
     await runner.setup()
     await web.TCPSite(runner, cfg.host, cfg.port).start()
     discovery = await start_discovery(cfg.discovery_port, cfg.port, cfg.name)

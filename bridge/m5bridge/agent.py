@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
+import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -46,6 +48,54 @@ class AgentResult:
     session_id: str
     is_error: bool = False
     cost_usd: float | None = None
+
+
+def windows_system_proxy() -> str:
+    """The proxy set in Windows Internet Settings (e.g. by Hiddify in system-proxy mode), or ""."""
+    if sys.platform != "win32":
+        return ""
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+        ) as key:
+            if not winreg.QueryValueEx(key, "ProxyEnable")[0]:
+                return ""
+            server = str(winreg.QueryValueEx(key, "ProxyServer")[0]).strip()
+    except OSError:
+        return ""
+    # Either "host:port" or per-protocol "http=host:port;https=host:port".
+    if "=" in server:
+        parts = dict(p.split("=", 1) for p in server.split(";") if "=" in p)
+        server = parts.get("https") or parts.get("http") or ""
+    if server and "://" not in server:
+        server = "http://" + server
+    return server
+
+
+def agent_env(proxy: str = "auto") -> dict[str, str]:
+    """Environment for `claude -p` without a parent Claude session's variables.
+
+    When the bridge is started from inside Claude Code / Claude Desktop it inherits
+    CLAUDECODE, CLAUDE_CODE_* and CLAUDE_AGENT_SDK_*; with those the child CLI expects the
+    host app to supply auth and reports "Not logged in" instead of using ~/.claude.
+
+    Console programs ignore the Windows system proxy, so where Claude is only reachable
+    through a VPN in system-proxy mode the CLI fails (ECONNRESET). proxy="auto" passes the
+    system proxy on as HTTPS_PROXY unless one is already set; "none" leaves it alone; any
+    other value is used as the proxy URL.
+    """
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not (k == "CLAUDECODE" or k == "CLAUDE_PID" or k.startswith(("CLAUDE_CODE_", "CLAUDE_AGENT_SDK_")))
+    }
+    url = windows_system_proxy() if proxy == "auto" else ("" if proxy == "none" else proxy)
+    if url and (proxy != "auto" or not (env.get("HTTPS_PROXY") or env.get("https_proxy"))):
+        env["HTTPS_PROXY"] = env["HTTP_PROXY"] = url
+        env.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
+    return env
 
 
 def find_claude(explicit: str = "") -> str:
@@ -135,6 +185,7 @@ class ClaudeAgent:
             self._proc = await asyncio.create_subprocess_exec(
                 *self._command(resume),
                 cwd=self.cfg.workdir,
+                env=agent_env(self.cfg.proxy),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

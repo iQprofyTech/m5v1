@@ -35,6 +35,7 @@ permission_mode = "default"   # default / acceptEdits / plan / bypassPermissions
 allowed_tools = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
 timeout_sec = 900
 max_reply_chars = 3000
+proxy = "auto"            # auto = Windows system proxy (e.g. Hiddify) / none / http://host:port
 
 [desktop]
 window_title = "Claude"   # title of the Claude Desktop window to type into
@@ -61,6 +62,7 @@ class Config:
     allowed_tools: list[str] = field(default_factory=list)
     agent_timeout: int = 900
     max_reply_chars: int = 3000
+    proxy: str = "auto"
 
     desktop_window_title: str = "Claude"
     desktop_press_enter: bool = True
@@ -102,6 +104,7 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         allowed_tools=list(agent.get("allowed_tools", [])),
         agent_timeout=int(agent.get("timeout_sec", 900)),
         max_reply_chars=int(agent.get("max_reply_chars", 3000)),
+        proxy=str(agent.get("proxy", "auto")),
         desktop_window_title=desktop.get("window_title", "Claude"),
         desktop_press_enter=bool(desktop.get("press_enter", True)),
         state_path=path.parent / "state.json",
