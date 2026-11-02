@@ -27,6 +27,22 @@ def test_auto_keeps_existing_proxy(monkeypatch):
     assert agent.agent_env("auto")["HTTPS_PROXY"] == "http://corp:3128"
 
 
+def test_describe_steps():
+    event = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {"type": "text", "text": "ok"},
+                {"type": "tool_use", "name": "Bash", "input": {"command": "git  status\n"}},
+                {"type": "tool_use", "name": "Edit", "input": {"file_path": "F:/p/main.py"}},
+                {"type": "tool_use", "name": "TodoWrite", "input": {"todos": []}},
+            ]
+        },
+    }
+    assert agent.describe_steps(event) == ["Bash: git status", "Edit: F:/p/main.py", "TodoWrite"]
+    assert agent.describe_steps({"type": "user"}) == []
+
+
 def test_explicit_proxy_wins(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://corp:3128")
     assert agent.agent_env("http://10.0.0.1:8080")["HTTPS_PROXY"] == "http://10.0.0.1:8080"

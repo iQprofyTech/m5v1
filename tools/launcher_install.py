@@ -144,7 +144,13 @@ def install(ser: serial.Serial, name: str, image: bytes) -> None:
         if sent * 10 // len(image) != prev_pct:
             print(f"  {name}: {sent * 100 // len(image)}%  {sent // 1024} / {len(image) // 1024} KB", flush=True)
     print(f"  sent in {time.time() - started:.0f}s")
-    result = wait_for(ser, ("OK", "ERR"), 60)
+    try:
+        result = wait_for(ser, ("OK", "ERR"), 60)
+    except serial.SerialException:
+        # Launcher reboots into the new app right after "OK flashed"; the port often
+        # disappears before that line is read, which after a full upload means success.
+        print("  device rebooted (installed)")
+        return
     if result.startswith("ERR"):
         raise SystemExit(f"{name}: {result}")
     print(f"  {result}")
@@ -155,7 +161,11 @@ def main() -> None:
     parser.add_argument("--port", default="COM3")
     parser.add_argument("--wait", type=float, default=30, help="seconds to wait for the Launcher console")
     parser.add_argument("--replace", action="store_true", help="delete an earlier install of the same name first")
-    parser.add_argument("images", nargs="+", metavar="NAME=FILE")
+    parser.add_argument(
+        "--cmd", action="append", default=[], metavar="LINE",
+        help='Launcher console command to run first, e.g. "partition delete m5v100" (repeatable)',
+    )
+    parser.add_argument("images", nargs="*", metavar="NAME=FILE")
     args = parser.parse_args()
 
     jobs = []
@@ -164,6 +174,18 @@ def main() -> None:
         if not path:
             sys.exit(f"expected NAME=FILE, got {item}")
         jobs.append((name, Path(path).read_bytes()))
+
+    if args.cmd:
+        print("waiting for Launcher...")
+        ser = open_launcher(args.port, args.wait)
+        try:
+            for line in args.cmd:
+                ser.write((line + "\n").encode())
+                print(f"  {line}: {wait_for(ser, ('OK', 'ERR'), 15)}")
+            for label in app_partitions(ser):
+                print(f"  app partition: {label}")
+        finally:
+            ser.close()
 
     for name, image in jobs:
         print(f"{name}: waiting for Launcher...")

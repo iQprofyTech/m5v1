@@ -6,7 +6,8 @@ jobs; the device polls `/api/jobs/{id}` until the job is done.
   GET  /api/status                 bridge name, busy flag, current session
   POST /api/voice?mode=&new=        body: raw PCM s16le mono, header X-Sample-Rate
   POST /api/text                   {"text": "...", "mode": "agent"|"desktop", "new": false}
-  GET  /api/jobs/{id}              job state / transcript / reply
+  GET  /api/jobs/{id}              job state / transcript / reply / latest agent steps
+  POST /api/jobs/{id}/confirm      run a voice command that waits in state "confirm"
   POST /api/jobs/{id}/cancel
   GET  /api/sessions               recent Claude Code sessions
   POST /api/sessions/select        {"id": "..."} or {"new": true}
@@ -33,19 +34,23 @@ log = logging.getLogger(__name__)
 
 MAX_AUDIO_SECONDS = 60
 MODES = ("agent", "desktop")
+CONFIRM_TIMEOUT = 120
+STEPS_SENT = 8  # the device only shows the latest few actions
 
 
 @dataclass
 class Job:
     id: str
     mode: str
-    state: str = "queued"  # queued, transcribing, running, done, error, cancelled
+    state: str = "queued"  # queued, transcribing, confirm, running, done, error, cancelled
     transcript: str = ""
     reply: str = ""
     error: str = ""
     session: str = ""
+    steps: list[str] = field(default_factory=list)  # agent tool calls, e.g. "Bash: git status"
     created: float = field(default_factory=time.time)
     task: asyncio.Task | None = None
+    confirmed: asyncio.Event = field(default_factory=asyncio.Event)
 
     def to_json(self) -> dict:
         return {
@@ -56,6 +61,8 @@ class Job:
             "reply": self.reply,
             "error": self.error,
             "session": self.session,
+            "step_count": len(self.steps),
+            "steps": self.steps[-STEPS_SENT:],
         }
 
 
@@ -88,6 +95,15 @@ class Bridge:
                 if not text:
                     job.state, job.error = "error", "речь не распознана"
                     return
+                # A misheard command must not reach an agent that can change files and run
+                # programs: show the transcript on the device and wait for Enter.
+                if job.mode == "agent" and self.cfg.confirm_voice:
+                    job.state = "confirm"
+                    try:
+                        await asyncio.wait_for(job.confirmed.wait(), CONFIRM_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        job.state, job.error = "cancelled", "не подтверждено"
+                        return
             else:
                 job.transcript = text
 
@@ -96,7 +112,7 @@ class Bridge:
                 await self.desktop.send(text)
                 job.reply = "Отправлено в Claude Desktop"
             else:
-                result = await self.agent.run(text, new_session=new)
+                result = await self.agent.run(text, new_session=new, on_step=job.steps.append)
                 job.session = result.session_id
                 job.reply = self._clip(result.text or "(пустой ответ)")
                 if result.is_error:
@@ -192,9 +208,16 @@ class Bridge:
     async def job(self, request: web.Request) -> web.Response:
         return web.json_response(self._job(request).to_json())
 
+    async def confirm(self, request: web.Request) -> web.Response:
+        job = self._job(request)
+        if job.state != "confirm":
+            raise web.HTTPConflict(text=f"job is {job.state}")
+        job.confirmed.set()
+        return web.json_response(job.to_json())
+
     async def cancel(self, request: web.Request) -> web.Response:
         job = self._job(request)
-        if job.state in ("queued", "transcribing", "running"):
+        if job.state in ("queued", "transcribing", "confirm", "running"):
             if job.mode == "agent" and job.state == "running":
                 await self.agent.cancel()
             elif job.task:
@@ -243,6 +266,7 @@ def create_app(cfg: Config, agent, transcriber, desktop) -> web.Application:
             web.post("/api/voice", bridge.voice),
             web.post("/api/text", bridge.text),
             web.get("/api/jobs/{id}", bridge.job),
+            web.post("/api/jobs/{id}/confirm", bridge.confirm),
             web.post("/api/jobs/{id}/cancel", bridge.cancel),
             web.get("/api/sessions", bridge.sessions),
             web.post("/api/sessions/select", bridge.select_session),

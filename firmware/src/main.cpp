@@ -41,6 +41,8 @@ static bool jobTranscriptShown = false;
 static uint32_t jobLastPoll = 0;
 static int jobPollErrors = 0;
 static String jobLastState;
+static int jobStepsShown = 0;  // agent tool calls already printed to the log
+static String jobActivity;     // latest agent tool call, shown in the input line
 
 static String netStatus = "--";
 static uint32_t lastStatusDraw = 0;
@@ -70,8 +72,15 @@ static void drawStatus() {
 static void drawIdleInput() {
   if (recording) return;
   if (!jobId.isEmpty()) {
-    String s = jobLastState == "transcribing" ? "Распознаю речь..." : "Claude работает... (Esc - отмена)";
-    uiDrawInput(s, TFT_CYAN);
+    if (jobLastState == "confirm") {
+      uiDrawInput("Enter - выполнить, Esc - отмена", TFT_YELLOW);
+    } else if (jobLastState == "transcribing") {
+      uiDrawInput("Распознаю речь...", TFT_CYAN);
+    } else if (!jobActivity.isEmpty()) {
+      uiDrawInput("> " + jobActivity, TFT_CYAN);
+    } else {
+      uiDrawInput("Claude работает... (Esc - отмена)", TFT_CYAN);
+    }
   } else if (input.isEmpty()) {
     uiDrawInput(gServer.valid ? "> держи G0 и говори, или пиши" : "> " + netStatus, TFT_DARKGREY);
   } else {
@@ -83,7 +92,7 @@ static void showHelp() {
   screen = Screen::Help;
   uiDrawLines("Клавиши (любая - назад)", {
       "G0 удерж. / Fn+Space - голос",
-      "Enter - отправить текст",
+      "Enter - отправить / подтвердить",
       "Tab - режим Agent/Desktop",
       "Fn+; Fn+. - прокрутка",
       "Fn+N новая сессия, Fn+L список",
@@ -139,6 +148,8 @@ static void startJob(const String& response) {
   jobLastPoll = millis();
   jobPollErrors = 0;
   jobLastState = "";
+  jobStepsShown = 0;
+  jobActivity = "";
   drawStatus();
   drawIdleInput();
 }
@@ -185,7 +196,18 @@ static void pollJob() {
     uiLogAdd(TFT_CYAN, "Вы: " + transcript);
     jobTranscriptShown = true;
   }
-  if (state != jobLastState) {
+  // The bridge sends only the latest steps; print the ones not shown yet.
+  int stepCount = doc["step_count"] | 0;
+  JsonArray steps = doc["steps"].as<JsonArray>();
+  int firstIndex = stepCount - static_cast<int>(steps.size());
+  bool redraw = state != jobLastState;
+  for (int i = std::max(jobStepsShown, firstIndex); i < stepCount; ++i) {
+    jobActivity = steps[i - firstIndex].as<String>();
+    uiLogAdd(TFT_DARKGREY, "* " + jobActivity);
+    redraw = true;
+  }
+  jobStepsShown = std::max(jobStepsShown, stepCount);
+  if (redraw) {
     jobLastState = state;
     drawIdleInput();
   }
@@ -201,6 +223,17 @@ static void pollJob() {
   jobId = "";
   drawStatus();
   drawIdleInput();
+}
+
+static void confirmJob() {
+  String resp;
+  int code = apiRequest("POST", "/api/jobs/" + jobId + "/confirm", "", resp);
+  if (code == 200) {
+    jobLastState = "running";
+    drawIdleInput();
+  } else {
+    uiLogAdd(TFT_RED, "Не удалось подтвердить: " + String(code));
+  }
 }
 
 static void cancelJob() {
@@ -469,6 +502,10 @@ static void handleMainKeys(const Keyboard_Class::KeysState& k) {
     cfgSave();
     uiLogAdd(TFT_YELLOW, gCfg.mode == Mode::Agent ? "Режим: агент Claude Code" : "Режим: чат Claude Desktop");
     drawStatus();
+    return;
+  }
+  if (k.enter && !jobId.isEmpty() && jobLastState == "confirm" && input.isEmpty()) {
+    confirmJob();
     return;
   }
   if (k.enter) {

@@ -48,6 +48,32 @@ whisper `small` (~480 МБ). Когда Windows спросит про досту
 или смените `permission_mode`. Это осознанный выбор: голосовая команда, распознанная с ошибкой,
 не должна сразу выполнять произвольные команды.
 
+## Удалённое управление: права агента и контроль его действий
+
+Агент — это Claude Code (`claude -p`), запущенный мостом в папке `[agent].workdir`
+(сейчас `F:/tmp/MyApps`, все проекты). В `bridge/config.toml`:
+
+- `permission_mode = "acceptEdits"` и `allowed_tools` с `Edit`/`Write`/`Bash` — агент сам правит
+  файлы и выполнит команды; `disallowed_tools` — то, что запрещено всегда (`rm -rf`, `format`,
+  `git push --force`, выключение ПК…);
+- `confirm_voice = true` — голосовая команда сначала показывается на экране Cardputer и ждёт
+  **Enter** (Esc — отмена), чтобы ошибка распознавания ничего не запустила. Текст с клавиатуры
+  выполняется сразу;
+- `add_dirs` — дополнительные папки вне `workdir`.
+
+Где смотреть, что делал агент:
+
+| Где | Что там |
+|---|---|
+| экран Cardputer | каждое действие строкой `* Bash: git status`, `* Edit: F:/…/main.py`, затем итог |
+| `bridge/logs/agent.log` | журнал на ПК: команда, все действия, ответ, стоимость. Следить вживую: `Get-Content bridge\logs\agent.log -Wait -Encoding utf8` |
+| `~/.claude/projects/F--tmp-MyApps/*.jsonl` | полные стенограммы сессий Claude Code (каждый вызов инструмента и его результат) |
+| `claude --resume` в `F:\tmp\MyApps` | открыть любую из этих сессий в терминале и продолжить её вручную |
+| `git status` / `git diff` / `git log` в проекте | что именно изменилось в файлах |
+
+Сессии с Cardputer — это сессии Claude Code CLI, а не чаты Claude Desktop; в чатах Desktop их
+нет (режим DESK, наоборот, пишет прямо в открытый чат Desktop).
+
 ## Launcher: заводская прошивка и m5v1 на одном устройстве
 
 На устройстве стоит [M5Launcher](https://github.com/bmorcelli/Launcher) 2.9.1, в нём две прошивки:

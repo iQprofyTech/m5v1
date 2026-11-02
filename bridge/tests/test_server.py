@@ -18,7 +18,9 @@ class FakeAgent:
         self.current = None
         self.busy = False
 
-    async def run(self, prompt, new_session=False):
+    async def run(self, prompt, new_session=False, on_step=None):
+        if on_step:
+            on_step("Bash: echo hi")
         self.prompts.append((prompt, new_session))
         self.current = "11111111-2222-3333-4444-555555555555"
         return AgentResult(text=f"ok: {prompt}", session_id=self.current)
@@ -51,7 +53,7 @@ class FakeDesktop:
 
 @pytest.fixture
 def parts():
-    return Config(token=TOKEN), FakeAgent(), FakeTranscriber(), FakeDesktop()
+    return Config(token=TOKEN, confirm_voice=False), FakeAgent(), FakeTranscriber(), FakeDesktop()
 
 
 @pytest.fixture
@@ -110,6 +112,54 @@ async def test_new_session_flag(client, parts):
 async def test_bad_mode_rejected(client):
     resp = await client.post("/api/text", json={"text": "x", "mode": "shell"}, headers=AUTH)
     assert resp.status == 400
+
+
+async def test_agent_steps_reported(client):
+    resp = await client.post("/api/text", json={"text": "x", "mode": "agent"}, headers=AUTH)
+    job = await wait_job(client, (await resp.json())["job"])
+    assert job["step_count"] == 1
+    assert job["steps"] == ["Bash: echo hi"]
+
+
+@pytest.fixture
+async def confirm_client(aiohttp_client, parts):
+    cfg, *rest = parts
+    cfg.confirm_voice = True
+    return await aiohttp_client(create_app(cfg, *rest))
+
+
+async def wait_state(client, job_id, state):
+    for _ in range(50):
+        data = await (await client.get(f"/api/jobs/{job_id}", headers=AUTH)).json()
+        if data["state"] == state:
+            return data
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"job never reached {state}")
+
+
+async def test_voice_agent_waits_for_confirm(confirm_client, parts):
+    pcm = (np.ones(16000) * 3000).astype("<i2").tobytes()
+    resp = await confirm_client.post("/api/voice?mode=agent", data=pcm, headers=AUTH)
+    job_id = (await resp.json())["job"]
+    job = await wait_state(confirm_client, job_id, "confirm")
+    assert job["transcript"] == "привет"
+    assert parts[1].prompts == []  # nothing ran yet
+
+    assert (await confirm_client.post(f"/api/jobs/{job_id}/confirm", headers=AUTH)).status == 200
+    job = await wait_job(confirm_client, job_id)
+    assert job["state"] == "done"
+    assert parts[1].prompts == [("привет", False)]
+
+
+async def test_voice_agent_cancel_while_confirming(confirm_client, parts):
+    pcm = (np.ones(16000) * 3000).astype("<i2").tobytes()
+    resp = await confirm_client.post("/api/voice?mode=agent", data=pcm, headers=AUTH)
+    job_id = (await resp.json())["job"]
+    await wait_state(confirm_client, job_id, "confirm")
+    await confirm_client.post(f"/api/jobs/{job_id}/cancel", headers=AUTH)
+    job = await wait_job(confirm_client, job_id)
+    assert job["state"] == "cancelled"
+    assert parts[1].prompts == []
 
 
 def test_pcm_resample_and_normalise():

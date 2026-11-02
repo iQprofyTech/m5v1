@@ -21,10 +21,42 @@ SESSION_ID_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")
 
 SYSTEM_HINT = (
     "Команды приходят голосом или с клавиатуры карманного устройства M5Stack Cardputer "
-    "с экраном 240x135. Отвечай кратко (до 5-6 строк), по-русски, без таблиц и markdown, "
-    "если пользователь не просит иначе. Голосовая расшифровка может содержать ошибки — "
-    "уточняй, если команда неоднозначна или опасна."
+    "с экраном 240x135: пользователь управляет этим компьютером удалённо и не видит экран ПК. "
+    "Выполняй задания сам, а в конце отвечай кратко (до 5-6 строк), по-русски, без таблиц и "
+    "markdown: что сделано и где лежит результат. Голосовая расшифровка может содержать "
+    "ошибки — если команда неоднозначна или может что-то необратимо удалить, сначала уточни."
 )
+
+
+_STEP_ARG = {
+    "Bash": "command",
+    "Read": "file_path",
+    "Write": "file_path",
+    "Edit": "file_path",
+    "MultiEdit": "file_path",
+    "NotebookEdit": "notebook_path",
+    "Glob": "pattern",
+    "Grep": "pattern",
+    "WebFetch": "url",
+    "WebSearch": "query",
+    "Task": "description",
+}
+
+
+def describe_steps(event: dict) -> list[str]:
+    """One short line per tool call in a stream-json event, e.g. 'Bash: git status'."""
+    if event.get("type") != "assistant":
+        return []
+    steps = []
+    for block in event.get("message", {}).get("content", []):
+        if block.get("type") != "tool_use":
+            continue
+        name = str(block.get("name", "?"))
+        args = block.get("input") or {}
+        arg = args.get(_STEP_ARG.get(name, ""), "") if isinstance(args, dict) else ""
+        text = f"{name}: {arg}" if arg else name
+        steps.append(" ".join(str(text).split())[:160])
+    return steps
 
 
 class AgentError(Exception):
@@ -162,18 +194,34 @@ class ClaudeAgent:
     # --- running ----------------------------------------------------------
 
     def _command(self, resume: str | None) -> list[str]:
-        cmd = [self.bin, "-p", "--output-format", "json", "--append-system-prompt", SYSTEM_HINT]
+        # stream-json emits every tool call as it happens, so the device and the audit log
+        # can show what the agent is doing, not only its final answer.
+        cmd = [self.bin, "-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt", SYSTEM_HINT]
         if self.cfg.permission_mode:
             cmd += ["--permission-mode", self.cfg.permission_mode]
         if self.cfg.allowed_tools:
             cmd += ["--allowedTools", ",".join(self.cfg.allowed_tools)]
+        if self.cfg.disallowed_tools:
+            cmd += ["--disallowedTools", ",".join(self.cfg.disallowed_tools)]
+        for extra in self.cfg.add_dirs:
+            cmd += ["--add-dir", extra]
         if resume:
             if not SESSION_ID_RE.match(resume):
                 raise AgentError("bad session id")
             cmd += ["--resume", resume]
         return cmd
 
-    async def run(self, prompt: str, new_session: bool = False) -> AgentResult:
+    def _audit(self, text: str) -> None:
+        """Append to bridge/logs/agent.log: every prompt, tool call and result, readable as text."""
+        try:
+            path = self.cfg.state_path.parent / "logs" / "agent.log"
+            path.parent.mkdir(exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}\n")
+        except OSError:
+            log.exception("could not write agent.log")
+
+    async def run(self, prompt: str, new_session: bool = False, on_step=None) -> AgentResult:
         prompt = prompt.strip()
         if not prompt:
             raise AgentError("empty prompt")
@@ -181,6 +229,7 @@ class ClaudeAgent:
             if new_session:
                 self.current = None
             resume = self.current
+            self._audit(f"> [{(resume or 'new')[:8]}] {prompt}")
             # The prompt goes through stdin so it can never be parsed as a CLI flag.
             self._proc = await asyncio.create_subprocess_exec(
                 *self._command(resume),
@@ -189,22 +238,43 @@ class ClaudeAgent:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=16 * 1024 * 1024,  # tool results (file contents) arrive as single long lines
             )
             proc = self._proc
+            proc.stdin.write(prompt.encode("utf-8"))
+            await proc.stdin.drain()
+            proc.stdin.close()
+            stderr_task = asyncio.create_task(proc.stderr.read())
+            final: dict = {}
             try:
-                out, err = await asyncio.wait_for(
-                    proc.communicate(prompt.encode("utf-8")), timeout=self.cfg.agent_timeout
-                )
-            except asyncio.TimeoutError:
+                async with asyncio.timeout(self.cfg.agent_timeout):
+                    while line := await proc.stdout.readline():
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            continue
+                        if event.get("type") == "result":
+                            final = event
+                        for step in describe_steps(event):
+                            self._audit(f"    {step}")
+                            if on_step:
+                                on_step(step)
+                    await proc.wait()
+            except TimeoutError:
                 proc.kill()
                 await proc.wait()
+                self._audit(f"  ! timeout after {self.cfg.agent_timeout}s")
                 raise AgentError(f"timeout after {self.cfg.agent_timeout}s")
             finally:
                 self._proc = None
+            err = await stderr_task
 
             if getattr(proc, "_m5_cancelled", False):
+                self._audit("  ! cancelled")
                 raise AgentCancelled("cancelled")
-            result = self._parse(out, err, proc.returncode)
+            result = self._parse(final, err, proc.returncode)
+            cost = f" (${result.cost_usd:.3f})" if result.cost_usd else ""
+            self._audit(f"  {'!' if result.is_error else '='} [{result.session_id[:8]}]{cost} {result.text}")
             if result.session_id and not result.is_error:
                 info = self.sessions.get(result.session_id)
                 title = info.title if info else prompt[:60]
@@ -213,14 +283,9 @@ class ClaudeAgent:
                 self._save_state()
             return result
 
-    def _parse(self, out: bytes, err: bytes, code: int | None) -> AgentResult:
-        text = out.decode("utf-8", "replace").strip()
-        try:
-            data = json.loads(text.splitlines()[-1]) if text else {}
-        except ValueError:
-            data = {}
+    def _parse(self, data: dict, err: bytes, code: int | None) -> AgentResult:
         if not data:
-            detail = err.decode("utf-8", "replace").strip() or text or f"exit code {code}"
+            detail = err.decode("utf-8", "replace").strip() or f"exit code {code}"
             raise AgentError(detail[-500:])
         reply = str(data.get("result") or "").strip()
         if not reply and data.get("subtype"):

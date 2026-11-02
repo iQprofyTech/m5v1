@@ -31,8 +31,15 @@ language = "ru"
 [agent]
 claude_bin = ""           # empty = find claude / claude.exe automatically
 workdir = "{workdir}"     # folder Claude Code agents work in
+add_dirs = []             # extra folders the agent may work in besides workdir
 permission_mode = "default"   # default / acceptEdits / plan / bypassPermissions
+# Read-only by default. For remote control of this PC, e.g.:
+#   permission_mode = "acceptEdits"
+#   allowed_tools = ["Read", "Glob", "Grep", "Edit", "MultiEdit", "Write", "NotebookEdit",
+#                    "Bash", "WebSearch", "WebFetch", "Task", "TodoWrite"]
 allowed_tools = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
+disallowed_tools = []     # always refused, e.g. ["Bash(rm -rf:*)", "Bash(git push --force:*)"]
+confirm_voice = true      # voice commands wait for Enter on the Cardputer before the agent runs
 timeout_sec = 900
 max_reply_chars = 3000
 proxy = "auto"            # auto = Windows system proxy (e.g. Hiddify) / none / http://host:port
@@ -60,6 +67,9 @@ class Config:
     workdir: str = field(default_factory=lambda: str(Path.home()))
     permission_mode: str = "default"
     allowed_tools: list[str] = field(default_factory=list)
+    disallowed_tools: list[str] = field(default_factory=list)
+    add_dirs: list[str] = field(default_factory=list)
+    confirm_voice: bool = True
     agent_timeout: int = 900
     max_reply_chars: int = 3000
     proxy: str = "auto"
@@ -102,6 +112,9 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         workdir=agent.get("workdir") or str(Path.home()),
         permission_mode=agent.get("permission_mode", "default"),
         allowed_tools=list(agent.get("allowed_tools", [])),
+        disallowed_tools=list(agent.get("disallowed_tools", [])),
+        add_dirs=list(agent.get("add_dirs", [])),
+        confirm_voice=bool(agent.get("confirm_voice", True)),
         agent_timeout=int(agent.get("timeout_sec", 900)),
         max_reply_chars=int(agent.get("max_reply_chars", 3000)),
         proxy=str(agent.get("proxy", "auto")),
