@@ -418,9 +418,12 @@ static void openWifiMenu() {
 static void openPasswordPrompt(const String& ssid) {
   screen = Screen::WifiPass;
   passSsid = ssid;
-  input = "";
-  uiDrawLines("Пароль для " + ssid, {"Введи пароль и Enter", "Esc - отмена"});
-  uiDrawInput("> _", TFT_WHITE);
+  const WifiCred* saved = cfgFindWifi(ssid);
+  input = saved ? saved->pass : String();
+  uiDrawLines("Пароль для " + ssid, {saved ? "Сохранённый пароль ниже" : "Введи пароль",
+                                      "Enter - подключиться", "Del - стереть символ",
+                                      "Aa+буква - заглавная", "Fn+` (Esc) - отмена"});
+  uiDrawInput("> " + input + "_", TFT_WHITE);
 }
 
 static void openSessionsMenu() {
@@ -488,15 +491,9 @@ static void handleMenuKeys(const Keyboard_Class::KeysState& k) {
       selectSession(menuIds[menuSel]);
       return;
     }
-    const String& ssid = menuIds[menuSel];
-    if (cfgFindWifi(ssid)) {
-      cfgAddWifi(ssid, cfgFindWifi(ssid)->pass);  // move to the front
-      cfgSave();
-      backToMain();
-      reconnectPending = true;
-    } else {
-      openPasswordPrompt(ssid);
-    }
+    // Always ask: a saved network gets its password pre-filled, so Enter alone reconnects
+    // and a changed password can be corrected in place.
+    openPasswordPrompt(menuIds[menuSel]);
     return;
   }
   if (k.del && screen == Screen::Wifi && count > 0 && cfgFindWifi(menuIds[menuSel])) {
