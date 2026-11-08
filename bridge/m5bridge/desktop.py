@@ -183,3 +183,9 @@ class DesktopTyper:
         await asyncio.to_thread(
             send_to_claude_desktop_sync, text, self.cfg.desktop_window_title, self.cfg.desktop_press_enter
         )
+
+    async def wait_reply(self, text: str, since: float, on_step=None) -> str | None:
+        """Claude Code's answer from the Desktop session transcript (None for a plain chat)."""
+        from .desktop_reply import wait_reply
+
+        return await wait_reply(text, since, on_step=on_step, timeout=self.cfg.agent_timeout)

@@ -5,7 +5,11 @@ Cardputer подключается к Wi-Fi, записывает голос (и
 
 - **режим AGENT** — запускает агента Claude Code (`claude -p`, с продолжением сессии) и
   возвращает ответ на экран Cardputer;
-- **режим DESK** — вставляет текст в окно Claude Desktop и нажимает Enter.
+- **режим DESK** — вставляет текст в окно Claude Desktop и нажимает Enter. Если там открыта
+  сессия **Claude Code** (вкладка Code), мост находит команду в её стенограмме
+  (`~/.claude/projects/*/*.jsonl`), показывает на Cardputer действия агента и возвращает его
+  итоговый ответ. Запросы разрешений в этом режиме появляются в Claude Desktop на ПК. Для обычного
+  чата Desktop ответ не возвращается, только «Отправлено».
 
 ```
 Cardputer ──Wi-Fi──► bridge (aiohttp, :8765) ──► faster-whisper ──► claude -p / Claude Desktop

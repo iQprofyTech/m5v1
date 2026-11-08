@@ -109,7 +109,8 @@ class Bridge:
                     return
                 # A misheard command must not reach an agent that can change files and run
                 # programs: show the transcript on the device and wait for Enter.
-                if job.mode == "agent" and self.cfg.confirm_voice:
+                # Desktop mode also reaches an agent (Claude Code in Claude Desktop).
+                if self.cfg.confirm_voice:
                     job.state = "confirm"
                     try:
                         await asyncio.wait_for(job.confirmed.wait(), CONFIRM_TIMEOUT)
@@ -121,8 +122,18 @@ class Bridge:
 
             job.state = "running"
             if job.mode == "desktop":
+                since = time.time()
                 await self.desktop.send(text)
                 job.reply = "Отправлено в Claude Desktop"
+                wait_reply = getattr(self.desktop, "wait_reply", None)
+                if wait_reply is not None:
+                    self._audit(f"> [desktop] {text}")
+                    reply = await wait_reply(text, since, on_step=job.steps.append)
+                    if reply is None:
+                        job.reply = "Отправлено в Claude Desktop (ответ не найден: открыт чат, а не Claude Code?)"
+                    else:
+                        job.reply = self._clip(reply or "(пустой ответ)")
+                        self._audit(f"  = [desktop] {reply}")
             else:
                 self.agent_job = job
                 try:
