@@ -1,6 +1,6 @@
 """Send Wi-Fi credentials, the bridge token and server URLs to the Cardputer over USB.
 
-    .venv\\Scripts\\python tools\\provision.py --port COM3 --ssid NSTATION
+    .venv\\Scripts\\python tools\\provision.py --port COM3 --ssid "MyWiFi"
     .venv\\Scripts\\python tools\\provision.py --port COM3 --remote-url https://m5.example.com
     .venv\\Scripts\\python tools\\provision.py --port COM3 --info
 

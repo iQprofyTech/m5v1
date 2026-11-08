@@ -59,7 +59,7 @@ press_enter = true
 
 [codex]
 bin = ""                  # empty = codex in PATH or the one bundled with the Codex app
-sandbox = "workspace-write"   # read-only / workspace-write / danger-full-access
+sandbox = "read-only"       # read-only / workspace-write / danger-full-access
                           # (on Windows workspace-write may ask for admin rights via UAC: use danger-full-access)
 args = []                 # extra `codex exec` arguments, e.g. ["-m", "gpt-5"]
 
@@ -106,7 +106,7 @@ class Config:
     desktop_press_enter: bool = True
 
     codex_bin: str = ""
-    codex_sandbox: str = "workspace-write"
+    codex_sandbox: str = "read-only"
     codex_args: list[str] = field(default_factory=list)
 
     window_reply_timeout: int = 180
@@ -164,7 +164,7 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         desktop_window_title=desktop.get("window_title", "Claude"),
         desktop_press_enter=bool(desktop.get("press_enter", True)),
         codex_bin=str(codex.get("bin", "")),
-        codex_sandbox=str(codex.get("sandbox", "workspace-write")),
+        codex_sandbox=str(codex.get("sandbox", "read-only")),
         codex_args=[str(a) for a in codex.get("args", [])],
         window_reply_timeout=int(window.get("reply_timeout", 180)),
         window_settle_sec=float(window.get("settle_sec", 6)),
