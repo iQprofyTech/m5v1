@@ -35,6 +35,9 @@ if sys.platform == "win32":
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
     user32.GetForegroundWindow.restype = wintypes.HWND
     user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+    user32.BringWindowToTop.argtypes = [wintypes.HWND]
+    kernel32.GetCurrentThreadId.restype = wintypes.DWORD
     user32.OpenClipboard.argtypes = [wintypes.HWND]
     user32.GetClipboardData.argtypes = [wintypes.UINT]
     user32.GetClipboardData.restype = wintypes.HANDLE
@@ -137,17 +140,36 @@ def _key(vk: int, up: bool = False) -> None:
 
 
 def _focus(hwnd) -> None:
+    """Bring the window to the front without pressing Alt.
+
+    Windows only lets the foreground thread hand over focus. The usual trick, a synthetic
+    Alt tap, also activates the menu bar of the target (Notepad, Electron apps such as
+    Claude Desktop), and the following Ctrl+V / Enter then go to that menu. Attaching to
+    the foreground thread's input queue avoids keystrokes; a Ctrl tap is the fallback.
+    """
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, SW_RESTORE)
-    # Windows only lets the foreground process change focus; a synthetic Alt tap lifts that lock.
-    _key(VK_MENU)
-    _key(VK_MENU, up=True)
-    user32.SetForegroundWindow(hwnd)
-    for _ in range(20):
+    if user32.GetForegroundWindow() == hwnd:
+        return
+    fg = user32.GetForegroundWindow()
+    fg_thread = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+    me = kernel32.GetCurrentThreadId()
+    attached = bool(fg_thread and fg_thread != me and user32.AttachThreadInput(me, fg_thread, True))
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(me, fg_thread, False)
+    for attempt in range(40):
         if user32.GetForegroundWindow() == hwnd:
             return
+        if attempt == 10:
+            _key(VK_CONTROL)
+            _key(VK_CONTROL, up=True)
+            user32.SetForegroundWindow(hwnd)
         time.sleep(0.05)
-    raise DesktopError("could not focus the Claude Desktop window")
+    raise DesktopError("could not bring the window to the front")
 
 
 def send_to_claude_desktop_sync(text: str, title: str, press_enter: bool) -> None:

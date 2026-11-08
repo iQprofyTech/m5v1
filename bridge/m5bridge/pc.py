@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import difflib
+import json
 import logging
 import re
 import subprocess
@@ -410,17 +411,44 @@ class WindowChat:
         self.hwnd: int | None = None
         self.title = ""
         self.app = ""
+        self._path = cfg.state_path.with_name("window.json")
+        try:  # the choice survives bridge restarts; the window is found again by app + title
+            saved = json.loads(self._path.read_text(encoding="utf-8"))
+            self.title, self.app = str(saved.get("title", "")), str(saved.get("app", ""))
+            self._resolve()
+        except (OSError, ValueError):
+            pass
+
+    def _resolve(self) -> bool:
+        """Find the chosen window again (after a restart of the bridge or of the app)."""
+        if self.hwnd and WIN and user32.IsWindow(self.hwnd):
+            return True
+        if not self.app:
+            return False
+        wins = [w for w in list_windows() if w["app"] == self.app]
+        same = [w for w in wins if w["title"] == self.title] or wins
+        if not same:
+            self.hwnd = None
+            return False
+        self.hwnd, self.title = same[0]["id"], same[0]["title"]
+        return True
 
     def select(self, hwnd: int) -> dict:
         for w in list_windows():
             if w["id"] == hwnd:
                 self.hwnd, self.title, self.app = hwnd, w["title"], w["app"]
+                try:
+                    self._path.write_text(
+                        json.dumps({"app": self.app, "title": self.title}, ensure_ascii=False), encoding="utf-8"
+                    )
+                except OSError:
+                    log.exception("could not save the chosen window")
                 return w
         raise PcError("no such window")
 
     async def ask(self, text: str, on_step=None) -> str:
-        if self.hwnd is None:
-            raise PcError("окно не выбрано: Fn+O на Cardputer")
+        if not await asyncio.to_thread(self._resolve):
+            raise PcError("окно не выбрано или закрыто: Fn+O на Cardputer")
         hwnd = self.hwnd
         await window_texts(hwnd)  # the first walk only switches on Chromium/Electron accessibility
         before = await window_texts(hwnd)
