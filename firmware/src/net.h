@@ -21,7 +21,8 @@ extern Endpoint gServer;
 Endpoint parseUrl(const String& url);
 
 // Connects to the strongest known network. status receives a short human-readable result.
-bool wifiConnect(String& status, uint32_t timeoutMs = 15000);
+// abortFn (optional) is polled while waiting; returning true stops the attempt (a key press).
+bool wifiConnect(String& status, uint32_t timeoutMs = 15000, bool (*abortFn)() = nullptr);
 
 // Finds the bridge: fixed LAN URL, then UDP discovery, then the remote URL.
 // Returns HTTP status of the probe (200 on success, 401 bad token, <0 unreachable).

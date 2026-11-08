@@ -47,6 +47,9 @@ static String jobActivity;     // latest agent tool call, shown in the input lin
 static String netStatus = "--";
 static uint32_t lastStatusDraw = 0;
 static uint32_t lastWifiCheck = 0;
+static uint32_t retryMs = 10000;  // automatic reconnect interval, grows while nothing is reachable
+static bool keysPending = false;  // a key press interrupted a blocking connect; handle it next
+static bool abortArmed = false;
 static bool reconnectPending = false;
 
 static std::vector<String> menuItems;
@@ -128,11 +131,27 @@ static void beep(uint16_t freq, uint32_t ms, int times = 1) {
 
 // --- connection -------------------------------------------------------------
 
+// Polled while Wi-Fi connects (up to 15 s per network): a new key press or G0 stops the
+// attempt so the keyboard never goes dead when the saved network is out of range.
+// Keys still held from the command that started the connect (Fn+R) do not count.
+static bool keyAbort() {
+  M5Cardputer.update();
+  bool pressed = M5Cardputer.Keyboard.isPressed() || M5Cardputer.BtnA.isPressed();
+  if (!pressed) {
+    abortArmed = true;
+    return false;
+  }
+  if (!abortArmed) return false;
+  keysPending = true;
+  return true;
+}
+
 static void connectAll() {
-  uiDrawInput("Подключаюсь к Wi-Fi...", TFT_YELLOW);
+  uiDrawInput("Подключаюсь к Wi-Fi... (клавиша - стоп)", TFT_YELLOW);
   String wifiStatus;
   gServer = Endpoint();
-  if (!wifiConnect(wifiStatus)) {
+  abortArmed = false;
+  if (!wifiConnect(wifiStatus, 15000, keyAbort)) {
     netStatus = wifiStatus;
     uiLogAdd(TFT_RED, wifiStatus);
     drawStatus();
@@ -588,7 +607,9 @@ static void handleMainKeys(const Keyboard_Class::KeysState& k) {
 }
 
 static void handleKeyboard() {
-  if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) return;
+  bool pending = keysPending;
+  keysPending = false;
+  if (!(M5Cardputer.Keyboard.isChange() || pending) || !M5Cardputer.Keyboard.isPressed()) return;
   Keyboard_Class::KeysState k = M5Cardputer.Keyboard.keysState();
   switch (screen) {
     case Screen::Main:
@@ -728,15 +749,22 @@ void loop() {
     connectAll();
   }
 
-  if (millis() - lastWifiCheck > 10000) {
-    lastWifiCheck = millis();
+  if (millis() - lastWifiCheck > retryMs && !keysPending) {
+    bool tried = false;
     if (!WiFi.isConnected() && jobId.isEmpty() && screen == Screen::Main && !gCfg.wifi.empty()) {
       connectAll();
+      tried = true;
     } else if (WiFi.isConnected() && !gServer.valid && !gCfg.token.isEmpty() && jobId.isEmpty() &&
                screen == Screen::Main) {
       resolveServer(netStatus);
+      drawStatus();
       drawIdleInput();
+      tried = true;
     }
+    // Count from the end of the attempt (it can block for many seconds) and back off while
+    // nothing is reachable, so the keyboard stays usable: 10 s, 20 s, 40 s ... up to 2 min.
+    retryMs = (!tried || gServer.valid) ? 10000 : std::min<uint32_t>(retryMs * 2, 120000);
+    lastWifiCheck = millis();
   }
   if (screen == Screen::Main && millis() - lastStatusDraw > 5000) drawStatus();
   delay(5);

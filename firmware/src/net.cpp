@@ -63,7 +63,7 @@ static std::unique_ptr<NetworkClient> makeClient(const Endpoint& ep) {
 
 // --- Wi-Fi ----------------------------------------------------------------
 
-bool wifiConnect(String& status, uint32_t timeoutMs) {
+bool wifiConnect(String& status, uint32_t timeoutMs, bool (*abortFn)()) {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   if (gCfg.wifi.empty()) {
@@ -95,7 +95,14 @@ bool wifiConnect(String& status, uint32_t timeoutMs) {
   for (const auto& c : candidates) {
     WiFi.begin(c.cred->ssid.c_str(), c.cred->pass.c_str());
     uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) delay(100);
+    while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
+      if (abortFn && abortFn()) {
+        WiFi.disconnect();
+        status = "Подключение прервано";
+        return false;
+      }
+      delay(50);
+    }
     if (WiFi.status() == WL_CONNECTED) {
       status = c.cred->ssid;
       return true;
