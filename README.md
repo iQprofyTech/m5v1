@@ -25,6 +25,8 @@ Cardputer ──Wi-Fi──► bridge (aiohttp, :8765) ──► faster-whisper 
 в `config.toml` — `danger-full-access` (в режиме `workspace-write` Codex на Windows спрашивает
 права администратора при каждом запуске, удалённо это не работает).
 
+**Инструкция пользователя (режимы, клавиши, советы): [docs/ИНСТРУКЦИЯ.md](docs/ИНСТРУКЦИЯ.md)**
+
 ## Состав
 
 | Путь | Что это |
@@ -107,7 +109,7 @@ powershell -ExecutionPolicy Bypass -File tools\install_autostart.ps1
 | `git status` / `git diff` / `git log` в проекте | что именно изменилось в файлах |
 
 Сессии с Cardputer — это сессии Claude Code CLI, а не чаты Claude Desktop; в чатах Desktop их
-нет (режим DESK, наоборот, пишет прямо в открытый чат Desktop).
+нет (режим ОКНО с выбранным окном Claude Desktop, наоборот, пишет прямо в открытый чат).
 
 ## Launcher: заводская прошивка и m5v1 на одном устройстве
 

@@ -3,7 +3,7 @@
     .venv\\Scripts\\python tools\\test_bridge.py discover
     .venv\\Scripts\\python tools\\test_bridge.py status
     .venv\\Scripts\\python tools\\test_bridge.py text "привет, ответь одним словом"
-    .venv\\Scripts\\python tools\\test_bridge.py voice speech.wav [--mode desktop]
+    .venv\\Scripts\\python tools\\test_bridge.py voice speech.wav [--mode claude|codex|window|type]
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("cmd", choices=["discover", "status", "text", "voice"])
     p.add_argument("arg", nargs="?")
-    p.add_argument("--mode", default="agent", choices=["agent", "desktop"])
+    p.add_argument("--mode", default="claude", choices=["claude", "codex", "window", "type", "agent", "desktop"])
     p.add_argument("--url", default=f"http://127.0.0.1:{CFG.get('port', 8765)}")
     a = p.parse_args()
 

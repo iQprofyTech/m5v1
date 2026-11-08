@@ -412,6 +412,7 @@ class WindowChat:
         self.title = ""
         self.app = ""
         self._path = cfg.state_path.with_name("window.json")
+        self._warm: set[int] = set()
         try:  # the choice survives bridge restarts; the window is found again by app + title
             saved = json.loads(self._path.read_text(encoding="utf-8"))
             self.title, self.app = str(saved.get("title", "")), str(saved.get("app", ""))
@@ -443,6 +444,10 @@ class WindowChat:
                     )
                 except OSError:
                     log.exception("could not save the chosen window")
+                try:  # choosing a window also switches to it (in KEYS mode Fn+O is the window switcher)
+                    focus_window(hwnd)
+                except Exception:
+                    log.info("could not bring %s to the front", self.title)
                 return w
         raise PcError("no such window")
 
@@ -450,7 +455,9 @@ class WindowChat:
         if not await asyncio.to_thread(self._resolve):
             raise PcError("окно не выбрано или закрыто: Fn+O на Cardputer")
         hwnd = self.hwnd
-        await window_texts(hwnd)  # the first walk only switches on Chromium/Electron accessibility
+        if hwnd not in self._warm:  # the first walk only switches on Chromium/Electron accessibility
+            await window_texts(hwnd)
+            self._warm.add(hwnd)
         before = await window_texts(hwnd)
         since = time.time()
         await asyncio.to_thread(focus_window, hwnd)
@@ -474,21 +481,24 @@ class WindowChat:
         if self.app.lower() == "claude":  # Claude Desktop Code tab: the transcript is cleaner
             from .desktop_reply import wait_reply
 
+            # An agent turn can run for many minutes; while its transcript is being followed the
+            # window deadline does not apply (wait_reply has the agent timeout).
             transcript = asyncio.create_task(
-                wait_reply(text, since, on_step=on_step, timeout=self.cfg.window_reply_timeout)
+                wait_reply(text, since, on_step=on_step, timeout=self.cfg.agent_timeout)
             )
 
         last: list[str] = []
         changed = time.monotonic()
         deadline = time.monotonic() + self.cfg.window_reply_timeout
         try:
-            while time.monotonic() < deadline:
+            while transcript is not None or time.monotonic() < deadline:
                 await asyncio.sleep(1.5)
                 if transcript is not None and transcript.done():
                     reply = transcript.result() if not transcript.exception() else None
                     if reply:
                         return reply
-                    transcript = None
+                    transcript = None  # not a Code session (or no text): fall back to the screen
+                    deadline = max(deadline, time.monotonic() + self.cfg.window_settle_sec * 2)
                 current = new_text(before, await window_texts(hwnd), text)
                 if current != last:
                     last, changed = current, time.monotonic()
