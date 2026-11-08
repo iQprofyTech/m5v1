@@ -139,3 +139,8 @@ def test_describe_codex_item():
     assert describe_codex_item({"type": "mcp_tool_call", "server": "gmail", "tool": "search"}) == "gmail: search"
     assert describe_codex_item({"type": "file_change", "changes": [{"path": "a.py"}]}) == "Edit: a.py"
     assert describe_codex_item({"type": "reasoning"}) is None
+
+
+def test_new_text_ignores_relative_times():
+    after = ["a", "19 minutes ago", "2 мин назад", "17:42", "только что", "Настоящий ответ"]
+    assert pc.new_text(["a"], after, "вопрос") == ["Настоящий ответ"]

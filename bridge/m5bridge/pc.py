@@ -12,6 +12,7 @@ import asyncio
 import ctypes
 import difflib
 import logging
+import re
 import subprocess
 import sys
 import threading
@@ -225,7 +226,15 @@ def list_windows() -> list[dict]:
     return out
 
 
-def send_to_window(hwnd: int, text: str, press_enter: bool = True) -> None:
+def focus_window(hwnd: int) -> None:
+    if not WIN:
+        raise PcError("Windows only")
+    if not user32.IsWindow(hwnd):
+        raise PcError("окно закрыто - выберите другое (Fn+O)")
+    _desk._focus(hwnd)
+
+
+def send_to_window(hwnd: int, text: str, press_enter: bool = True, focus: bool = True) -> None:
     """Focus the window, paste the text (clipboard restored afterwards), press Enter."""
     if not WIN:
         raise PcError("Windows only")
@@ -234,7 +243,8 @@ def send_to_window(hwnd: int, text: str, press_enter: bool = True) -> None:
     previous = _desk._get_clipboard_text()
     _desk._set_clipboard_text(text)
     try:
-        _desk._focus(hwnd)
+        if focus:
+            _desk._focus(hwnd)
         time.sleep(0.15)
         press("v", ["ctrl"])
         if press_enter:
@@ -293,6 +303,87 @@ async def window_texts(hwnd: int) -> list[str]:
     return await asyncio.get_running_loop().run_in_executor(_uia_pool, _window_texts_sync, hwnd)
 
 
+def _input_box_sync(hwnd: int, budget: float = 4.0):
+    """The window's message box: the lowest enabled, keyboard-focusable edit field."""
+    import uiautomation as auto
+
+    if not getattr(_uia_local, "init", None):
+        _uia_local.init = auto.UIAutomationInitializerInThread()
+    root = auto.ControlFromHandle(hwnd)
+    if root is None:
+        return None
+    best, best_y = None, -1
+    deadline = time.monotonic() + budget
+
+    def walk(ctrl, depth):
+        nonlocal best, best_y
+        if depth > 80 or time.monotonic() > deadline:
+            return
+        try:
+            kind = ctrl.ControlTypeName
+            if kind in ("EditControl", "DocumentControl") and ctrl.IsEnabled and ctrl.IsKeyboardFocusable:
+                rect = ctrl.BoundingRectangle
+                if not ctrl.IsOffscreen and rect.height() < 400 and rect.bottom > best_y:
+                    best, best_y = ctrl, rect.bottom
+            child = ctrl.GetFirstChildControl()
+        except Exception:
+            return
+        while child is not None:
+            walk(child, depth + 1)
+            try:
+                child = child.GetNextSiblingControl()
+            except Exception:
+                return
+
+    walk(root, 0)
+    return best
+
+
+def _focus_input_sync(hwnd: int) -> bool:
+    box = _input_box_sync(hwnd)
+    if box is None:
+        return False
+    try:
+        box.SetFocus()
+        return True
+    except Exception:
+        return False
+
+
+def _input_value_sync(hwnd: int) -> str:
+    box = _input_box_sync(hwnd, budget=2.0)
+    if box is None:
+        return ""
+    try:
+        pattern = box.GetValuePattern()
+        if pattern is not None:
+            return pattern.Value or ""
+    except Exception:
+        pass
+    try:
+        return box.Name or ""
+    except Exception:
+        return ""
+
+
+async def focus_input(hwnd: int) -> bool:
+    return await asyncio.get_running_loop().run_in_executor(_uia_pool, _focus_input_sync, hwnd)
+
+
+async def input_value(hwnd: int) -> str:
+    return await asyncio.get_running_loop().run_in_executor(_uia_pool, _input_value_sync, hwnd)
+
+
+# Relative times and counters that change on their own ("5 minutes ago", "2 мин назад", "17:42").
+_NOISE = re.compile(
+    r"[\d\s:.,%/+-]+"
+    r"|.*\b\d+\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hours?|d|days?)\s+ago"
+    r"|just now|now|только что|сейчас"
+    r"|\d+\s*(сек|с|мин|м|ч|час\w*|дн\w*)\.?\s*назад",
+    re.IGNORECASE,
+)
+
+
 def new_text(before: list[str], after: list[str], prompt: str) -> list[str]:
     """Text items that appeared in the window since `before`, minus the echo of the prompt."""
     sm = difflib.SequenceMatcher(a=before, b=after, autojunk=False)
@@ -303,7 +394,7 @@ def new_text(before: list[str], after: list[str], prompt: str) -> list[str]:
     want = " ".join(prompt.split())
     out: list[str] = []
     for item in added:
-        if len(item) < 2 or item == want or (len(item) > 8 and item in want) or (want and want in item and len(item) < len(want) + 20):
+        if len(item) < 2 or _NOISE.fullmatch(item) or item == want or (len(item) > 8 and item in want) or (want and want in item and len(item) < len(want) + 20):
             continue
         if out and out[-1] == item:
             continue
@@ -334,9 +425,22 @@ class WindowChat:
         await window_texts(hwnd)  # the first walk only switches on Chromium/Electron accessibility
         before = await window_texts(hwnd)
         since = time.time()
-        await asyncio.to_thread(send_to_window, hwnd, text, self.cfg.desktop_press_enter)
+        await asyncio.to_thread(focus_window, hwnd)
+        # Ctrl+V lands wherever keyboard focus happens to be (a sidebar, a button...):
+        # put it into the message box first.
+        if not await focus_input(hwnd):
+            log.info("window %s: no input box found, pasting into the focused element", self.title)
+        await asyncio.to_thread(send_to_window, hwnd, text, self.cfg.desktop_press_enter, False)
         if on_step:
             on_step(f"Окно: {self.title[:40]}")
+        if self.cfg.desktop_press_enter:
+            # Still in the box a moment later = Enter did not send it (e.g. the app was busy).
+            await asyncio.sleep(1.5)
+            want = " ".join(text.split())
+            if want and want in " ".join((await input_value(hwnd)).split()):
+                log.info("window %s: message not sent, pressing Enter again", self.title)
+                await asyncio.to_thread(focus_window, hwnd)
+                await asyncio.to_thread(press, "enter")
 
         transcript = None
         if self.app.lower() == "claude":  # Claude Desktop Code tab: the transcript is cleaner

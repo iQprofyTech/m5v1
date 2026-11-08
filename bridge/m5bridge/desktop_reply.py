@@ -22,7 +22,7 @@ from .agent import describe_tool
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 POLL = 0.4
-FIND_TIMEOUT = 30.0  # the command should show up in a transcript within this time
+FIND_TIMEOUT = 60.0  # the command should show up in a transcript within this time (queued if busy)
 TAIL_QUIET = 1.5     # after end_turn, wait this long for the rest of the message's blocks
 
 
