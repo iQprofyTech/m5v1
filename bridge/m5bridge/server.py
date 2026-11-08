@@ -33,6 +33,7 @@ import hmac
 import ipaddress
 import itertools
 import logging
+import os
 import secrets
 import time
 import wave
@@ -103,6 +104,7 @@ class Bridge:
         self.agent_job: Job | None = None  # the job whose agent run is in progress
         self.always_allowed: set[str] = set()  # "A" on the device; until the bridge restarts
         self.last_seen: dict = {}  # the device's latest request, for the dashboard
+        self.ping_ok: dict = {}    # {"ip", "t"}: the device last answered a ping (it is quiet while idle)
 
     def _new_job(self, mode: str) -> Job:
         mode = "claude" if mode == "agent" else mode
@@ -225,12 +227,36 @@ class Bridge:
                 "now": time.time(),
                 "name": self.cfg.name,
                 "version": __version__,
-                "device": self.last_seen,
+                "pid": os.getpid(),
+                "control_port": self.cfg.control_port,
+                "device": self.device_state(),
                 "agents": {name: {"busy": a.busy, "session": a.current or ""} for name, a in self.agents.items()},
                 "window": self.chat.title if self.chat and self.chat.hwnd else "",
                 "jobs": [dict(j.to_json(), steps=j.steps[-30:]) for j in jobs],
             }
         )
+
+    def device_state(self) -> dict:
+        """The device's last request plus whether it is online now: a recent request or a ping reply."""
+        dev = dict(self.last_seen)
+        if dev:
+            now = time.time()
+            pinged = self.ping_ok.get("ip") == dev.get("ip") and now - self.ping_ok.get("t", 0) < DEVICE_ONLINE_SEC
+            dev["online"] = now - dev["t"] < DEVICE_ONLINE_SEC or pinged
+            if pinged:
+                dev["seen"] = max(dev["t"], self.ping_ok["t"])
+        return dev
+
+    async def watch_device(self) -> None:
+        """Ping the device every few seconds: between commands it sends nothing, so a ping is the only
+        way to tell "idle" from "switched off"."""
+        while True:
+            await asyncio.sleep(PING_EVERY_SEC)
+            ip = self.last_seen.get("ip", "")
+            if not ip or _is_loopback(ip):
+                continue
+            if await _ping(ip):
+                self.ping_ok = {"ip": ip, "t": time.time()}
 
     async def status(self, request: web.Request) -> web.Response:
         return web.json_response(
@@ -470,6 +496,31 @@ def _explain_agent_error(text: str) -> str:
     return text
 
 
+DEVICE_ONLINE_SEC = 15
+PING_EVERY_SEC = 5
+
+
+async def _ping(ip: str) -> bool:
+    """One ICMP echo with the system ping (no window, no admin rights)."""
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if os.name == "nt":
+        cmd, flags = ["ping", "-n", "1", "-w", "800", ip], 0x08000000  # CREATE_NO_WINDOW
+    else:
+        cmd, flags = ["ping", "-c", "1", "-W", "1", ip], 0
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, creationflags=flags
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), 5)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    # Windows ping exits 0 even for "destination host unreachable": look for a real reply
+    return b"TTL=" in out.upper()
+
+
 def _is_loopback(addr: str | None) -> bool:
     try:
         return ipaddress.ip_address(addr or "").is_loopback
@@ -509,6 +560,7 @@ def _auth_middleware(token: str, internal_secret: str, bridge=None):
 
 INTERNAL_SECRET_KEY = web.AppKey("internal_secret", str)
 BRIDGE_KEY = web.AppKey("bridge", Bridge)
+WATCH_KEY = web.AppKey("watch_device", asyncio.Task)
 
 
 def create_app(cfg: Config, agents, transcriber, desktop, chat=None) -> web.Application:
@@ -521,6 +573,15 @@ def create_app(cfg: Config, agents, transcriber, desktop, chat=None) -> web.Appl
     )
     app[BRIDGE_KEY] = bridge
     app[INTERNAL_SECRET_KEY] = internal_secret
+
+    async def start_watch(app):
+        app[WATCH_KEY] = asyncio.create_task(bridge.watch_device())
+
+    async def stop_watch(app):
+        app[WATCH_KEY].cancel()
+
+    app.on_startup.append(start_watch)
+    app.on_cleanup.append(stop_watch)
     app.add_routes(
         [
             web.get("/", bridge.dashboard),

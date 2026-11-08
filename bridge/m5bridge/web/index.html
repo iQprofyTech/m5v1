@@ -70,6 +70,31 @@
   td.t { color: var(--dim); font-family: var(--mono); white-space: nowrap; }
   td.txt { color: var(--warm); }
   td.rep { color: #c8dde7; max-width: 520px; }
+  button:disabled { opacity: .45; cursor: default; border-color: var(--line); }
+  button.stop { border-color: rgba(255,93,108,.55); color: #ffd3d8; background: rgba(255,93,108,.10); }
+  button.go { border-color: rgba(61,255,154,.6); color: #cfffe6; background: rgba(61,255,154,.12); }
+  .ctl { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; color: var(--dim); user-select: none; padding: 6px 4px; }
+  .switch .track { width: 42px; height: 24px; border-radius: 999px; background: #10202a; border: 1px solid var(--line); position: relative; transition: background .2s, border-color .2s; }
+  .switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--dim); transition: left .2s, background .2s; }
+  .switch.on { color: var(--ink); }
+  .switch.on .track { background: rgba(61,255,154,.18); border-color: rgba(61,255,154,.6); }
+  .switch.on .track::after { left: 21px; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .switch.wait { opacity: .5; pointer-events: none; }
+  #ctl-note { font-size: 13px; color: var(--dim); max-width: 340px; }
+  #swarm { position: absolute; pointer-events: none; }
+  .node.off .node-ring { stroke: rgba(255,93,108,.55); stroke-dasharray: 6 6; filter: none; }
+  .node.off > g, .node.off .node-label { opacity: .4; }
+  .node.off .node-sub { fill: var(--bad); }
+  .link.off { stroke: rgba(255,93,108,.35); }
+  #stopped { display: none; position: absolute; inset: 52px 8px 8px; align-items: center; justify-content: center; flex-direction: column; gap: 16px;
+             background: rgba(3,7,12,.72); border-radius: 14px; text-align: center; backdrop-filter: blur(2px); }
+  #stopped.show { display: flex; }
+  #stopped b { font-size: 26px; }
+  #stopped p { color: var(--dim); max-width: 420px; line-height: 1.5; }
+  #stopped button { font-size: 18px; padding: 12px 26px; }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #2a0f14; border: 1px solid var(--bad); color: #ffd3d8;
+           padding: 12px 18px; border-radius: 12px; max-width: 90vw; display: none; z-index: 5; }
   #login { display: none; max-width: 460px; margin: 80px auto; }
   #login input { width: 100%; margin: 12px 0; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); background: #02060a; color: var(--ink); font-family: var(--mono); }
   .empty { color: var(--dim); }
@@ -83,6 +108,12 @@
   <span class="pill"><span id="dev-dot" class="dot"></span><span id="dev-text">Cardputer: —</span></span>
   <span class="spacer"></span>
   <span class="hud" id="bridge-name"></span>
+  <div class="ctl" id="ctl" hidden>
+    <button id="power-btn" title="Остановить или запустить мост">Остановить</button>
+    <button id="restart-btn" title="Перезапустить мост (например, после правки config.toml)">Перезапустить</button>
+    <span class="switch" id="auto-sw" role="switch" tabindex="0" title="Запускать мост при входе в Windows (задача «m5bridge» в Планировщике заданий)"><span class="track"></span><span>Автозапуск</span></span>
+  </div>
+  <span id="ctl-note" hidden></span>
   <button id="demo-btn" title="Показать работу моста на примерах, без настоящих команд">Демо</button>
 </header>
 
@@ -126,13 +157,11 @@
 
       <!-- the bridge -->
       <g id="n-bridge" class="node">
-        <circle cx="480" cy="260" r="118" fill="url(#core)" opacity=".18" />
-        <circle class="node-ring" cx="480" cy="260" r="80" />
-        <circle class="spin" cx="480" cy="260" r="98" fill="none" stroke="#36e4ff" stroke-width="2" stroke-dasharray="14 10" opacity=".7" />
-        <circle class="spin rev" cx="480" cy="260" r="110" fill="none" stroke="#36e4ff" stroke-width="6" stroke-dasharray="1.5 12" opacity=".45" />
-        <circle id="bridge-core" cx="480" cy="260" r="30" fill="#36e4ff" opacity=".85" />
-        <text class="node-label" x="480" y="410" text-anchor="middle">Мост</text>
-        <text class="node-sub" id="bridge-sub" x="480" y="432" text-anchor="middle">распознавание · маршрутизация</text>
+        <circle cx="480" cy="260" r="150" fill="url(#core)" opacity=".10" />
+        <circle class="spin" cx="480" cy="260" r="128" fill="none" stroke="#36e4ff" stroke-width="1.5" stroke-dasharray="14 10" opacity=".35" />
+        <circle class="spin rev" cx="480" cy="260" r="140" fill="none" stroke="#36e4ff" stroke-width="5" stroke-dasharray="1.5 12" opacity=".25" />
+        <text class="node-label" x="480" y="424" text-anchor="middle">Мост</text>
+        <text class="node-sub" id="bridge-sub" x="480" y="446" text-anchor="middle">распознавание · маршрутизация</text>
       </g>
 
       <!-- targets -->
@@ -145,7 +174,9 @@
       </g>
       <g id="pulses"></g>
     </svg>
+    <canvas id="swarm"></canvas>
     <div id="stage-status"></div>
+    <div id="stopped"><b>Мост остановлен</b><p>Cardputer не получает ответов, пока мост выключен.</p><button class="go" id="start-big">Запустить мост</button></div>
   </section>
 
   <section class="card" id="now">
@@ -162,6 +193,7 @@
     <table><thead><tr><th>Время</th><th>Режим</th><th>Команда</th><th>Итог</th><th>Ответ</th></tr></thead><tbody id="hist"></tbody></table>
   </section>
 </main>
+<div id="toast"></div>
 
 <script>
 (function () {
@@ -176,6 +208,214 @@
   var demo = false, demoTimer = null;
   var seen = {};              // job id -> {state, steps}
   var current = null;         // job shown in "Сейчас"
+
+  // ---- the bridge as a swarm of neurons (canvas over the scheme) ------------
+  var Swarm = (function () {
+    var cv = $("swarm"), ctx = cv.getContext("2d");
+    var CX = 480, CY = 260, R = 112, N = 200;
+    var reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var COLORS = { cyan: [54, 228, 255], warm: [255, 197, 107], ask: [255, 225, 77], ok: [61, 255, 154], bad: [255, 93, 108], off: [70, 92, 104] };
+    var nodes = [], nb = [], edges = [], sparks = [], dust = [], flowParts = [];
+    var level = 0.22, target = 0.22, tint = COLORS.cyan.slice(), base = COLORS.cyan, flashUntil = 0, flashCol = null;
+    var flow = null, flowAcc = 0, rot = 0, last = performance.now(), dpr = 1, scale = 1;
+    var seed = 11; function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+
+    for (var i = 0; i < N; i++) {           // a fuzzy sphere: shell neurons plus a denser core
+      var y = 1 - 2 * (i + 0.5) / N, rr = Math.sqrt(1 - y * y), th = i * 2.399963;
+      var d = i % 4 === 0 ? 0.25 + rnd() * 0.45 : 0.78 + rnd() * 0.3;
+      nodes.push({ x: Math.cos(th) * rr * d, y: y * d, z: Math.sin(th) * rr * d, ph: rnd() * 6.283, e: 0, px: 0, py: 0, pz: 0, k: 1 });
+      nb.push([]);
+    }
+    var seenEdge = {};
+    nodes.forEach(function (a, ia) {        // wire each neuron to its 3 nearest neighbours
+      nodes.map(function (b, ib) { return [ib, (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z)]; })
+        .sort(function (p, q) { return p[1] - q[1]; }).slice(1, 4).forEach(function (p) {
+          var key = Math.min(ia, p[0]) + "-" + Math.max(ia, p[0]);
+          if (!seenEdge[key]) { seenEdge[key] = 1; edges.push([ia, p[0]]); nb[ia].push(p[0]); nb[p[0]].push(ia); }
+        });
+    });
+    for (i = 0; i < 110; i++) dust.push({ a: rnd() * 6.283, r: 1.25 + rnd() * 0.6, sp: (0.08 + rnd() * 0.25) * (rnd() < 0.5 ? -1 : 1), y: (rnd() - 0.5) * 0.6, s: 0.4 + rnd() });
+
+    function resize() {
+      var svg = $("flow").getBoundingClientRect(), st = $("stage").getBoundingClientRect();
+      dpr = window.devicePixelRatio || 1; scale = svg.width / 1070;
+      cv.style.left = (svg.left - st.left) + "px"; cv.style.top = (svg.top - st.top) + "px";
+      cv.style.width = svg.width + "px"; cv.style.height = svg.height + "px";
+      cv.width = Math.round(svg.width * dpr); cv.height = Math.round(svg.height * dpr);
+    }
+    window.addEventListener("resize", resize);
+
+    function fire(i, s, gen) {
+      var n = nodes[i]; n.e = Math.min(1.5, n.e + s);
+      if (gen > 3) return;
+      nb[i].forEach(function (j) {
+        if (Math.random() < 0.14 + level * 0.24) sparks.push({ a: i, b: j, u: 0, d: 160 + Math.random() * 220, gen: (gen || 0) + 1 });
+      });
+    }
+    function rgba(c, a) { return "rgba(" + (c[0] | 0) + "," + (c[1] | 0) + "," + (c[2] | 0) + "," + Math.max(0, Math.min(1, a)).toFixed(3) + ")"; }
+
+    function frame(now) {
+      requestAnimationFrame(frame);
+      var dt = Math.min(64, now - last); last = now;
+      if (document.hidden || !cv.width) return;
+      level += (target - level) * Math.min(1, dt / 500);
+      var want = flashCol && now < flashUntil ? flashCol : base;
+      for (var c = 0; c < 3; c++) tint[c] += (want[c] - tint[c]) * Math.min(1, dt / 260);
+      rot += dt * (reduce ? 0.00004 : 0.00010 + level * 0.00055);
+
+      ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+      ctx.clearRect(0, 0, 1070, 520);
+      ctx.globalCompositeOperation = "lighter";
+
+      // core glow
+      var g = ctx.createRadialGradient(CX, CY, 0, CX, CY, R * 1.35);
+      g.addColorStop(0, rgba(tint, 0.07 + level * 0.16)); g.addColorStop(0.5, rgba(tint, 0.03 + level * 0.05)); g.addColorStop(1, rgba(tint, 0));
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(CX, CY, R * 1.35, 0, 6.283); ctx.fill();
+
+      // project neurons: slow rotation, breathing, a tilt so it reads as 3D
+      var cr = Math.cos(rot), sr = Math.sin(rot), tilt = 0.38, ct = Math.cos(tilt), stt = Math.sin(tilt);
+      nodes.forEach(function (n) {
+        var w = 1 + 0.035 * Math.sin(now * 0.0011 + n.ph) + level * 0.05 * Math.sin(now * 0.0047 + n.ph * 3) + n.e * 0.04;
+        var x = n.x * w, y = n.y * w, z = n.z * w;
+        var x1 = x * cr + z * sr, z1 = -x * sr + z * cr;
+        var y2 = y * ct - z1 * stt, z2 = y * stt + z1 * ct;
+        var k = 3.4 / (3.4 + z2);
+        n.px = CX + x1 * R * k; n.py = CY + y2 * R * k; n.pz = z2; n.k = k;
+        n.e = Math.max(0, n.e - dt * 0.0021);
+      });
+
+      // synapses
+      ctx.lineWidth = 0.9;
+      edges.forEach(function (ed) {
+        var a = nodes[ed[0]], b = nodes[ed[1]], depth = 1 - (a.pz + b.pz + 2) / 4;
+        var al = (0.10 + level * 0.12) * (0.4 + depth) + (a.e + b.e) * 0.22;
+        if (al < 0.01) return;
+        ctx.strokeStyle = rgba(tint, al); ctx.beginPath(); ctx.moveTo(a.px, a.py); ctx.lineTo(b.px, b.py); ctx.stroke();
+      });
+
+      // spontaneous firing, more when busy; signals travel along synapses and cascade
+      var rate = reduce ? 0.3 : 1 + level * level * 14;
+      if (Math.random() < rate * dt / 1000) fire((Math.random() * N) | 0, 0.9, 0);
+      for (var s = sparks.length - 1; s >= 0; s--) {
+        var sp = sparks[s]; sp.u += dt / sp.d;
+        if (sp.u >= 1) { sparks.splice(s, 1); fire(sp.b, 0.55, sp.gen); continue; }
+        var A = nodes[sp.a], B = nodes[sp.b], x = A.px + (B.px - A.px) * sp.u, y = A.py + (B.py - A.py) * sp.u;
+        var tx = A.px + (B.px - A.px) * Math.max(0, sp.u - 0.3), ty = A.py + (B.py - A.py) * Math.max(0, sp.u - 0.3);
+        ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1.1; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
+        ctx.fillStyle = rgba(tint, 0.95); ctx.beginPath(); ctx.arc(x, y, 1.6, 0, 6.283); ctx.fill();
+      }
+      if (sparks.length > 160) sparks.splice(0, sparks.length - 160);
+
+      // neurons
+      nodes.forEach(function (n) {
+        var depth = 1 - (n.pz + 1) / 2, r = (0.7 + 1.0 * n.k) * (1 + Math.min(1, n.e) * 0.9);
+        if (n.e > 0.4) {
+          var gl = ctx.createRadialGradient(n.px, n.py, 0, n.px, n.py, r * 4.5);
+          gl.addColorStop(0, rgba(tint, 0.42 * n.e)); gl.addColorStop(1, rgba(tint, 0));
+          ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(n.px, n.py, r * 4.5, 0, 6.283); ctx.fill();
+        }
+        ctx.fillStyle = n.e > 0.8 ? "rgba(255,255,255,0.85)" : rgba(tint, 0.22 + depth * 0.4 + level * 0.1 + n.e * 0.5);
+        ctx.beginPath(); ctx.arc(n.px, n.py, r, 0, 6.283); ctx.fill();
+      });
+
+      // orbiting dust
+      dust.forEach(function (p) {
+        p.a += p.sp * dt * 0.001 * (0.4 + level * 1.6);
+        var x = CX + Math.cos(p.a) * R * p.r, y = CY + Math.sin(p.a) * R * p.r * 0.34 + p.y * R * 0.5;
+        ctx.fillStyle = rgba(tint, (0.10 + level * 0.25) * p.s); ctx.beginPath(); ctx.arc(x, y, 0.9 * p.s, 0, 6.283); ctx.fill();
+      });
+
+      // a stream of particles along the active link (to the agent while it works)
+      if (flow) {
+        var path = $(flow.link);
+        flowAcc += dt;
+        while (path && flowAcc > 55) { flowAcc -= 55; flowParts.push({ path: path, len: path.getTotalLength(), rev: flow.rev, col: flow.col, u: 0, j: (Math.random() - 0.5) * 6 }); }
+      }
+      for (var f = flowParts.length - 1; f >= 0; f--) {
+        var q = flowParts[f]; q.u += dt / 900;
+        if (q.u >= 1) { flowParts.splice(f, 1); continue; }
+        var uu = q.rev ? 1 - q.u : q.u, pt = q.path.getPointAtLength(q.len * uu), a2 = Math.sin(q.u * Math.PI);
+        ctx.fillStyle = rgba(q.col, 0.85 * a2); ctx.beginPath(); ctx.arc(pt.x, pt.y + q.j * a2, 1.9, 0, 6.283); ctx.fill();
+      }
+      ctx.globalCompositeOperation = "source-over";
+    }
+
+    resize(); setTimeout(resize, 300);
+    requestAnimationFrame(frame);
+    var LEVEL = { off: 0, idle: 0.22, listen: 0.55, confirm: 0.45, run: 1, ask: 0.7 };
+    return {
+      set: function (state, link) {           // the swarm's mood, plus the link it streams along
+        target = LEVEL[state] == null ? 0.22 : LEVEL[state];
+        base = state === "off" ? COLORS.off : state === "ask" || state === "confirm" ? COLORS.ask : state === "listen" ? COLORS.warm : COLORS.cyan;
+        flow = link ? { link: link.id, rev: !!link.rev, col: link.col || COLORS.cyan } : null;
+      },
+      burst: function (n) { for (var i = 0; i < (n || 4); i++) fire((Math.random() * N) | 0, 1, 1); },
+      inject: function () { nodes.forEach(function (n, i) { if (n.px < CX - R * 0.55) fire(i, 1, 2); }); },
+      flash: function (name, ms) { flashCol = COLORS[name]; flashUntil = performance.now() + (ms || 1200); this.burst(8); },
+      colors: COLORS,
+    };
+  })();
+
+  // ---- bridge manager: stop / start / autostart (http://localhost:8764, this PC only) ----
+  var LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  var ctlPort = "8764", ctl = null, ctlBusy = false;
+  function ctlBase() { return location.port === ctlPort ? "" : "http://127.0.0.1:" + ctlPort; }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(function () { t.style.display = "none"; }, 6000); }
+  function ctlPost(path, body) {
+    return fetch(ctlBase() + path, { method: "POST", headers: { "Content-Type": "application/json", "X-M5-Control": "1" }, body: JSON.stringify(body || {}) })
+      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || r.status); return d; }); });
+  }
+  function drawCtl() {
+    var s = ctl ? ctl.bridge : "", btn = $("power-btn"), sw = $("auto-sw");
+    $("ctl").hidden = !ctl; $("ctl-note").hidden = !!ctl || !LOCAL;
+    if (!ctl) {
+      $("ctl-note").textContent = "Кнопки «Стоп/Старт» и «Автозапуск» работают через менеджер моста: запустите tools\\install_autostart.ps1";
+      $("stopped").classList.remove("show");
+      return;
+    }
+    btn.disabled = s === "starting" || s === "stopping" || ctlBusy;
+    btn.textContent = s === "starting" ? "Запускаю…" : s === "stopping" ? "Останавливаю…" : s === "running" ? "Остановить" : "Запустить";
+    btn.className = s === "running" ? "stop" : s === "stopped" ? "go" : "";
+    $("restart-btn").disabled = s !== "running" || ctlBusy;
+    sw.classList.toggle("on", ctl.autostart === true);
+    sw.setAttribute("aria-checked", ctl.autostart === true ? "true" : "false");
+    sw.title = ctl.autostart == null ? "Автозапуск не установлен: включите, чтобы мост запускался при входе в Windows"
+                                     : "Запускать мост при входе в Windows (задача «m5bridge» в Планировщике заданий)";
+    var down = !demo && (s === "stopped" || s === "starting");
+    $("stopped").classList.toggle("show", down);
+    $("stopped").querySelector("b").textContent = s === "starting" ? "Мост запускается…" : "Мост остановлен";
+    $("start-big").hidden = s !== "stopped";
+    if (down) { $("link-dot").className = "dot off"; $("link-text").textContent = s === "starting" ? "мост запускается…" : "мост остановлен"; if (!demo) Swarm.set("off"); }
+    if (ctl.error && ctl.error !== drawCtl.lastErr) toast(ctl.error);
+    drawCtl.lastErr = ctl.error;
+  }
+  function pollCtl() {
+    if (!LOCAL) return;
+    fetch(ctlBase() + "/control/status", { cache: "no-store" }).then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (d) { ctl = d; drawCtl(); }).catch(function () { ctl = null; drawCtl(); });
+  }
+  function power() {
+    if (!ctl) return;
+    if (ctl.bridge === "running" && !confirm("Остановить мост? Cardputer не будет получать ответы, пока мост не запустят снова.")) return;
+    ctlBusy = true; drawCtl();
+    ctlPost(ctl.bridge === "running" ? "/control/stop" : "/control/start").then(function (d) { ctl = d; })
+      .catch(function (e) { toast("Не получилось: " + e.message); }).then(function () { ctlBusy = false; drawCtl(); });
+  }
+  $("power-btn").onclick = power;
+  $("start-big").onclick = power;
+  $("restart-btn").onclick = function () {
+    ctlBusy = true; drawCtl();
+    ctlPost("/control/restart").then(function (d) { ctl = d; }).catch(function (e) { toast("Не получилось: " + e.message); })
+      .then(function () { ctlBusy = false; drawCtl(); });
+  };
+  function toggleAuto() {
+    if (!ctl) return;
+    var sw = $("auto-sw"); sw.classList.add("wait");
+    ctlPost("/control/autostart", { enabled: ctl.autostart !== true }).then(function (d) { ctl.autostart = d.autostart; })
+      .catch(function (e) { toast("Автозапуск не изменён: " + e.message); }).then(function () { sw.classList.remove("wait"); drawCtl(); });
+  }
+  $("auto-sw").onclick = toggleAuto;
+  $("auto-sw").onkeydown = function (e) { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleAuto(); } };
 
   // ---- pulses: a dot travelling along a link --------------------------------
   function pulse(linkId, reverse, color, dur) {
@@ -228,6 +468,7 @@
     if (!prev) {                       // a new command arrived from the device
       chain([["l-dev", false, "#ffc56b", 800]]);
       flash("n-dev", "hot", 1000);
+      setTimeout(Swarm.inject, 650);
       prev = seen[job.id] = { state: "", steps: 0 };
     }
     var running = job.state === "running" || job.state === "approve";
@@ -235,10 +476,11 @@
       if (job.state === "running" && prev.state !== "approve") chain([["l-" + target, false, "#36e4ff", 900]]);
       if (job.state === "approve") flash("n-" + target, "ask", 4000);
       if (job.state === "confirm") flash("n-dev", "ask", 4000);
-      if (job.state === "done") { chain([["l-" + target, true, "#3dff9a", 800], ["l-dev", true, "#3dff9a", 800]]); flash("n-dev", "ok", 1800); flash("n-" + target, "ok", 1400); }
-      if (job.state === "error") { flash("n-bridge", "bad", 1800); }
+      if (job.state === "done") { chain([["l-" + target, true, "#3dff9a", 800], ["l-dev", true, "#3dff9a", 800]]); flash("n-dev", "ok", 1800); flash("n-" + target, "ok", 1400); Swarm.flash("ok", 1400); }
+      if (job.state === "error") { flash("n-bridge", "bad", 1800); Swarm.flash("bad", 1800); }
     }
     var n = (job.steps || []).length;
+    if (n > prev.steps && running) { Swarm.burst(4); }
     if (n > prev.steps && running) { for (var i = prev.steps; i < n; i++) setTimeout(function () { pulse("l-" + target, true, "#a8e3f2", 700); }, (i - prev.steps) * 250); }
     prev.state = job.state; prev.steps = Math.max(prev.steps, job.step_count || n);
     return running || job.state === "transcribing" || job.state === "confirm" ? target : null;
@@ -246,9 +488,13 @@
   function ago(t, now) { var s = Math.max(0, Math.round(now - t)); return s < 60 ? s + " с" : s < 3600 ? Math.round(s / 60) + " мин" : Math.round(s / 3600) + " ч"; }
   function render(data) {
     $("bridge-name").textContent = data.version ? data.name + " · v" + data.version : data.name;
-    var dev = data.device || {}, fresh = dev.t && data.now - dev.t < 20;
-    $("dev-dot").className = "dot " + (fresh ? "on" : dev.t ? "off" : "");
-    $("dev-text").textContent = dev.t ? "Cardputer: " + (fresh ? "на связи" : "был " + ago(dev.t, data.now) + " назад") + (dev.ip ? " · " + dev.ip : "") : "Cardputer: ещё не подключался";
+    if (data.control_port) ctlPort = String(data.control_port);
+    var dev = data.device || {}, online = !!dev.online;
+    $("dev-dot").className = "dot " + (online ? "on" : "off");
+    $("dev-text").textContent = online ? "Cardputer: на связи" + (dev.ip ? " · " + dev.ip : "") :
+      dev.t ? "Cardputer: не в сети · был " + ago(dev.seen || dev.t, data.now) + " назад" : "Cardputer: не подключался";
+    $("n-dev").classList.toggle("off", !online); $("l-dev").classList.toggle("off", !online);
+    $("dev-sub").textContent = online ? "на связи · голос · текст" : dev.t ? "не в сети" : "не подключался";
     $("window-sub").textContent = data.window ? data.window.slice(0, 26) : "окно ПК";
     var jobs = (data.jobs || []).slice().sort(function (a, b) { return a.created - b.created; });
     var active = null;
@@ -256,7 +502,11 @@
     var last = jobs[jobs.length - 1];
     var shown = active || last;
     if (shown) showNow(shown);
-    setHot(active ? MODE[active.mode] || "claude" : null, !!active);
+    var tgt = active ? MODE[active.mode] || "claude" : null;
+    setHot(tgt, !!active);
+    var st = active ? active.state : "";
+    Swarm.set(st === "running" ? "run" : st === "approve" ? "ask" : st === "transcribing" ? "listen" : st === "confirm" ? "confirm" : "idle",
+              st === "running" ? { id: "l-" + tgt, col: Swarm.colors.cyan } : st === "transcribing" ? { id: "l-dev", col: Swarm.colors.warm } : null);
     $("hist").innerHTML = jobs.slice().reverse().map(function (j) {
       var esc = function (s) { return String(s || "").replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
       return "<tr><td class=t>" + ago(j.created, data.now) + "</td><td><span class=chip>" + esc(MODE_RU[j.mode] || j.mode) + "</span></td><td class=txt>" + esc(j.transcript) +
@@ -277,7 +527,8 @@
       $("link-dot").className = "dot on"; $("link-text").textContent = "мост на связи";
       render(data);
     }).catch(function (e) {
-      if (String(e.message) !== "auth") { $("link-dot").className = "dot off"; $("link-text").textContent = "нет связи с мостом"; }
+      if (String(e.message) !== "auth" && !(ctl && ctl.bridge !== "running")) { $("link-dot").className = "dot off"; $("link-text").textContent = "нет связи с мостом"; }
+      if (String(e.message) !== "auth" && !demo) Swarm.set("off");
     });
   }
   $("token-save").onclick = function () { token = $("token").value.trim(); localStorage.setItem("m5v1-token", token); poll(); };
@@ -291,7 +542,7 @@
   ];
   function runDemo() {
     var now = Date.now() / 1000, jobs = [], k = 0, i = 0;
-    function frame(job) { render({ now: Date.now() / 1000, name: "демо", version: "", device: { t: Date.now() / 1000, ip: "192.168.137.79" }, window: "chrome: Яндекс Музыка", jobs: jobs.slice() }); }
+    function frame(job) { render({ now: Date.now() / 1000, name: "демо", version: "", device: { t: Date.now() / 1000, ip: "192.168.137.79", online: true }, window: "chrome: Яндекс Музыка", jobs: jobs.slice() }); }
     function next() {
       if (!demo) return;
       var s = SCRIPT[k % SCRIPT.length], id = "demo-" + (i++);
@@ -314,11 +565,12 @@
   $("demo-btn").onclick = function () {
     demo = !demo; this.classList.toggle("active", demo); this.textContent = demo ? "Демо: вкл" : "Демо";
     seen = {}; $("steps").innerHTML = ""; $("steps").dataset.job = "";
-    if (demo) { $("link-dot").className = "dot on"; $("link-text").textContent = "демо-режим"; runDemo(); } else { clearTimeout(demoTimer); poll(); }
+    if (demo) { $("link-dot").className = "dot on"; $("link-text").textContent = "демо-режим"; $("stopped").classList.remove("show"); runDemo(); } else { clearTimeout(demoTimer); poll(); pollCtl(); }
   };
 
-  poll();
+  poll(); pollCtl();
   setInterval(poll, 700);
+  setInterval(pollCtl, 1500);
 })();
 </script>
 </body>

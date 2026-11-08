@@ -24,6 +24,7 @@ TEMPLATE = """\
 host = "0.0.0.0"          # listen on all interfaces (LAN). Use "127.0.0.1" if only a tunnel should reach it.
 port = 8765
 discovery_port = 8766     # UDP port the Cardputer broadcasts to find the bridge on the LAN
+control_port = 8764       # bridge manager (start/stop/autostart), this PC only: http://localhost:8764
 name = "{name}"
 token = "{token}"
 
@@ -80,6 +81,7 @@ class Config:
     host: str = "0.0.0.0"
     port: int = 8765
     discovery_port: int = 8766
+    control_port: int = 8764
     name: str = field(default_factory=platform.node)
     token: str = ""
 
@@ -142,6 +144,7 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         host=server.get("host", "0.0.0.0"),
         port=int(server.get("port", 8765)),
         discovery_port=int(server.get("discovery_port", 8766)),
+        control_port=int(server.get("control_port", 8764)),
         name=server.get("name") or platform.node(),
         token=server.get("token", ""),
         whisper_model=speech.get("model", "small"),
