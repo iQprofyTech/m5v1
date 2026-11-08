@@ -514,6 +514,10 @@ static void handlePasswordKeys(const Keyboard_Class::KeysState& k) {
     return;
   }
   if (k.enter) {
+    if (!input.isEmpty() && input.length() < 8) {  // WPA2: 8..63 characters, empty = open network
+      uiDrawInput("Пароль - минимум 8 символов", TFT_RED);
+      return;
+    }
     cfgAddWifi(passSsid, input);
     cfgSave();
     input = "";
@@ -680,6 +684,9 @@ static void handleSerialLine(const String& line) {
     uint8_t val = strtol(line.substring(sp + 1).c_str(), nullptr, 16);
     bool ok = M5.In_I2C.writeRegister8(kEs8311Addr, reg, val, 400000);
     Serial.printf("ESW %02X=%02X %s\n", reg, val, ok ? "OK" : "FAIL");
+  } else if (line == "WIFI") {  // reconnect now; progress is printed as "WIFI ..." lines
+    reconnectPending = true;
+    Serial.println("WIFI reconnect queued");
   } else if (line == "PING") {
     Serial.println("PONG m5v1 " M5V1_VERSION);
   } else if (line == "INFO") {

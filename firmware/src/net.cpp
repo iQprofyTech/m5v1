@@ -63,7 +63,57 @@ static std::unique_ptr<NetworkClient> makeClient(const Endpoint& ep) {
 
 // --- Wi-Fi ----------------------------------------------------------------
 
+// Why the last attempt failed, as reported by the Wi-Fi driver (wifi_err_reason_t).
+static volatile int lastReason = 0;
+
+static void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) lastReason = info.wifi_sta_disconnected.reason;
+}
+
+static String reasonText(int r) {
+  switch (r) {
+    case 2:
+    case 15:
+    case 202:
+    case 204:
+      return "неверный пароль";
+    case 201:
+      return "сеть не найдена";
+    case 200:
+      return "слабый сигнал";
+    case 5:
+      return "точка доступа переполнена";
+    case 203:
+      return "отказ в подключении";
+    case 20:
+    case 29:
+    case 210:
+    case 211:
+      return "неподдерживаемая защита (нужен WPA2)";
+    default:
+      return "код " + String(r);
+  }
+}
+
+static const char* authName(wifi_auth_mode_t m) {
+  switch (m) {
+    case WIFI_AUTH_OPEN: return "open";
+    case WIFI_AUTH_WEP: return "WEP";
+    case WIFI_AUTH_WPA_PSK: return "WPA";
+    case WIFI_AUTH_WPA2_PSK: return "WPA2";
+    case WIFI_AUTH_WPA_WPA2_PSK: return "WPA/WPA2";
+    case WIFI_AUTH_WPA3_PSK: return "WPA3";
+    case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2/WPA3";
+    default: return "other";
+  }
+}
+
 bool wifiConnect(String& status, uint32_t timeoutMs, bool (*abortFn)()) {
+  static bool handlerSet = false;
+  if (!handlerSet) {
+    WiFi.onEvent(onWifiEvent);
+    handlerSet = true;
+  }
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   if (gCfg.wifi.empty()) {
@@ -80,6 +130,8 @@ bool wifiConnect(String& status, uint32_t timeoutMs, bool (*abortFn)()) {
   for (int i = 0; i < n; ++i) {
     const WifiCred* cred = cfgFindWifi(WiFi.SSID(i));
     if (!cred) continue;
+    Serial.printf("WIFI seen '%s' rssi=%d ch=%d auth=%s\n", WiFi.SSID(i).c_str(), WiFi.RSSI(i),
+                  WiFi.channel(i), authName(WiFi.encryptionType(i)));
     bool seen = false;
     for (auto& c : candidates) seen |= c.cred == cred;
     if (!seen) candidates.push_back({WiFi.RSSI(i), cred});
@@ -92,7 +144,10 @@ bool wifiConnect(String& status, uint32_t timeoutMs, bool (*abortFn)()) {
     candidates.push_back({-100, &gCfg.wifi.front()});
   }
 
+  String failures;
   for (const auto& c : candidates) {
+    lastReason = 0;
+    Serial.printf("WIFI connect '%s' (password %u chars)\n", c.cred->ssid.c_str(), (unsigned)c.cred->pass.length());
     WiFi.begin(c.cred->ssid.c_str(), c.cred->pass.c_str());
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
@@ -104,12 +159,17 @@ bool wifiConnect(String& status, uint32_t timeoutMs, bool (*abortFn)()) {
       delay(50);
     }
     if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("WIFI ok '%s' ip=%s\n", c.cred->ssid.c_str(), WiFi.localIP().toString().c_str());
       status = c.cred->ssid;
       return true;
     }
+    int reason = lastReason;
+    Serial.printf("WIFI fail '%s' reason=%d status=%d\n", c.cred->ssid.c_str(), reason, (int)WiFi.status());
+    if (!failures.isEmpty()) failures += "; ";
+    failures += c.cred->ssid + ": " + (reason ? reasonText(reason) : String("нет ответа"));
     WiFi.disconnect();
   }
-  status = "Не удалось подключиться к Wi-Fi";
+  status = "Wi-Fi не подключён - " + failures;
   return false;
 }
 

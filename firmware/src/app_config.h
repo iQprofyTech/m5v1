@@ -26,7 +26,7 @@ static constexpr size_t kMaxWifi = 8;
 
 void cfgLoad();
 void cfgSave();
-void cfgAddWifi(const String& ssid, const String& pass);
+void cfgAddWifi(String ssid, String pass);  // by value: may be given fields of an existing entry
 void cfgRemoveWifi(const String& ssid);
 const WifiCred* cfgFindWifi(const String& ssid);
 

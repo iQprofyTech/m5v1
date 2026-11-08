@@ -64,7 +64,9 @@ void cfgRemoveWifi(const String& ssid) {
   }
 }
 
-void cfgAddWifi(const String& ssid, const String& pass) {
+// Takes copies: callers pass fields of an entry in gCfg.wifi (re-selecting a known network),
+// and cfgRemoveWifi below destroys that entry. With references this saved an empty password.
+void cfgAddWifi(String ssid, String pass) {
   cfgRemoveWifi(ssid);
   gCfg.wifi.insert(gCfg.wifi.begin(), {ssid, pass});  // newest first
   if (gCfg.wifi.size() > kMaxWifi) gCfg.wifi.resize(kMaxWifi);
