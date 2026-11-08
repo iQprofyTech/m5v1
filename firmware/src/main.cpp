@@ -89,7 +89,7 @@ static const char* modeHint() {
   switch (gCfg.mode) {
     case Mode::Codex: return "Режим: агент Codex";
     case Mode::Window: return "Режим: окно ПК (Fn+O - выбрать окно)";
-    case Mode::Keys: return "Режим: клавиатура и мышь ПК (Fn+H - клавиши)";
+    case Mode::Keys: return "Режим: клавиатура и мышь ПК, голос печатается на ПК (Fn+H)";
     default: return "Режим: агент Claude Code";
   }
 }
@@ -136,24 +136,22 @@ static void showHelp() {
   screen = Screen::Help;
   if (gCfg.mode == Mode::Keys) {
     uiDrawLines("КЛАВ: клавиши ПК (любая - назад)", {
-        "буквы, Enter, Del, Tab - на ПК",
-        "Ctrl/Alt+буква - сочетание",
-        "Fn+; . , / - стрелки, Fn+` - Esc",
-        "Opt+; . , / - мышь, Opt+Enter клик",
-        "Opt+Space - правый, Opt+[ ] - скролл",
-        "G0 - диктовка, Fn+Tab - режим",
-        "Fn+P команды ПК, Fn+O окна",
+        "Tab - режим! Opt+Tab - Tab на ПК",
+        "буквы/Enter/Del, Ctrl/Alt+буква",
+        "Fn+; . , / стрелки, Fn+` Esc",
+        "Opt+; . , / мышь, Opt+Enter клик",
+        "Opt+Space прав., Opt+[ ] скролл",
+        "G0 - диктовка в окно ПК",
     });
     return;
   }
   uiDrawLines("Клавиши (любая - назад)", {
-      "G0 / Fn+Space - голос, Enter - ок",
       "Tab - CLAUDE/CODEX/ОКНО/КЛАВ",
+      "G0 / Fn+Space - голос, Enter - ок",
       "Fn+O окно ПК, Fn+P команды ПК",
       "Запрос агента: Enter/A/Esc",
-      "Fn+; Fn+. - прокрутка",
-      "Fn+N нов. сессия, Fn+L сессии",
-      "Fn+W Wi-Fi, Fn+R, Fn+` - отмена",
+      "Fn+N/Fn+L сессии, Fn+; . скролл",
+      "Fn+W Wi-Fi, Fn+R, Fn+` отмена",
   });
 }
 
@@ -616,8 +614,9 @@ static void sendMouse(int dx, int dy, const char* click = "", int scroll = 0) {
 
 static void handleKeysMode(const Keyboard_Class::KeysState& k) {
   static constexpr int kStep = 40;
-  if (k.opt) {  // mouse
-    if (hasChar(k, ';')) sendMouse(0, -kStep);
+  if (k.opt) {  // mouse; Opt+Tab is the PC's Tab
+    if (k.tab) sendKey("tab", false, false, k.shift);
+    else if (hasChar(k, ';')) sendMouse(0, -kStep);
     else if (hasChar(k, '.')) sendMouse(0, kStep);
     else if (hasChar(k, ',')) sendMouse(-kStep, 0);
     else if (hasChar(k, '/')) sendMouse(kStep, 0);
@@ -748,7 +747,9 @@ static void handlePasswordKeys(const Keyboard_Class::KeysState& k) {
 
 static void handleMainKeys(const Keyboard_Class::KeysState& k) {
   bool keys = gCfg.mode == Mode::Keys && jobId.isEmpty() && !recording;
-  if (k.fn && k.tab) {
+  // Tab always switches the mode, also in KEYS (where Opt+Tab, Ctrl+Tab and Alt+Tab go to the PC),
+  // so the device can never get stuck in a mode that forwards every key.
+  if (k.tab && !k.ctrl && !k.alt && !k.opt && !recording) {
     cycleMode();
     return;
   }
