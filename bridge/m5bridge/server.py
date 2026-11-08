@@ -130,7 +130,10 @@ class Bridge:
                     self._audit(f"> [desktop] {text}")
                     reply = await wait_reply(text, since, on_step=job.steps.append)
                     if reply is None:
-                        job.reply = "Отправлено в Claude Desktop (ответ не найден: открыт чат, а не Claude Code?)"
+                        job.reply = (
+                            "Отправлено в Claude Desktop, но ответ прочитать нельзя: в окне открыт обычный "
+                            "чат. Откройте вкладку Code с сессией для голоса и повторите."
+                        )
                     elif not reply:
                         job.reply = "Отправлено в Claude Desktop, но ответа нет: сессия была занята другой задачей"
                     else:
