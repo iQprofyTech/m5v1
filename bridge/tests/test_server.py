@@ -195,3 +195,20 @@ def test_pcm_resample_and_normalise():
     audio = pcm16_to_float(pcm, 8000)
     assert audio.size == 16000
     assert 0.8 < float(audio.max()) <= 0.91
+
+
+async def test_dashboard_page_is_public(client):
+    resp = await client.get("/")
+    assert resp.status == 200
+    assert "m5v1" in await resp.text()
+
+
+async def test_activity_shows_jobs_and_device(client):
+    resp = await client.post("/api/text", json={"text": "привет", "mode": "agent"}, headers=AUTH)
+    await wait_job(client, (await resp.json())["job"])
+    # the test client is on loopback: the dashboard on this PC needs no token
+    data = await (await client.get("/api/activity")).json()
+    assert data["jobs"][0]["transcript"] == "привет"
+    assert data["jobs"][0]["steps"] == ["Bash: echo hi"]
+    assert data["device"]["path"].startswith("/api/")
+    assert "claude" in data["agents"]

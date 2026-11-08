@@ -3,6 +3,8 @@
 All endpoints require `Authorization: Bearer <token>`. Voice and text commands become
 jobs; the device polls `/api/jobs/{id}` until the job is done.
 
+  GET  /                         live dashboard (web/index.html), no token: it holds no data
+  GET  /api/activity              what the dashboard draws; no token from this PC, token from the LAN
   GET  /api/status                 bridge name, busy flag, current session
   POST /api/voice?mode=&new=        body: raw PCM s16le mono, header X-Sample-Rate
   POST /api/text                   {"text": "...", "mode": MODE, "new": false}
@@ -34,6 +36,7 @@ import logging
 import secrets
 import time
 import wave
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -82,6 +85,7 @@ class Job:
             "step_count": len(self.steps),
             "steps": self.steps[-STEPS_SENT:],
             "approval": self.approval,
+            "created": round(self.created, 3),
         }
 
 
@@ -98,6 +102,7 @@ class Bridge:
         self._ids = itertools.count(1)
         self.agent_job: Job | None = None  # the job whose agent run is in progress
         self.always_allowed: set[str] = set()  # "A" on the device; until the bridge restarts
+        self.last_seen: dict = {}  # the device's latest request, for the dashboard
 
     def _new_job(self, mode: str) -> Job:
         mode = "claude" if mode == "agent" else mode
@@ -207,6 +212,25 @@ class Bridge:
         job.task = asyncio.create_task(self._process(job, **kwargs))
 
     # --- handlers ---------------------------------------------------------
+
+    async def dashboard(self, request: web.Request) -> web.Response:
+        """The live bridge dashboard (bridge/m5bridge/web/index.html)."""
+        return web.FileResponse(Path(__file__).parent / "web" / "index.html")
+
+    async def activity(self, request: web.Request) -> web.Response:
+        """Everything the dashboard draws: the device, the agents and the latest jobs with their steps."""
+        jobs = sorted(self.jobs.values(), key=lambda j: j.created, reverse=True)[:15]
+        return web.json_response(
+            {
+                "now": time.time(),
+                "name": self.cfg.name,
+                "version": __version__,
+                "device": self.last_seen,
+                "agents": {name: {"busy": a.busy, "session": a.current or ""} for name, a in self.agents.items()},
+                "window": self.chat.title if self.chat and self.chat.hwnd else "",
+                "jobs": [dict(j.to_json(), steps=j.steps[-30:]) for j in jobs],
+            }
+        )
 
     async def status(self, request: web.Request) -> web.Response:
         return web.json_response(
@@ -453,13 +477,20 @@ def _is_loopback(addr: str | None) -> bool:
         return False
 
 
-def _auth_middleware(token: str, internal_secret: str):
+PUBLIC_PATHS = ("/", "/ui")  # the dashboard page itself holds no data or secrets
+
+
+def _auth_middleware(token: str, internal_secret: str, bridge=None):
     expected = f"Bearer {token}".encode()
     internal = f"Bearer {internal_secret}".encode()
 
     @web.middleware
     async def auth(request: web.Request, handler):
         got = request.headers.get("Authorization", "").encode()
+        if request.path in PUBLIC_PATHS:
+            return await handler(request)
+        if request.path == "/api/activity" and _is_loopback(request.remote):
+            return await handler(request)  # the dashboard opened on this PC needs no token
         if request.path.startswith("/internal/"):
             # Only the approval helper started by this bridge: loopback plus a per-run secret,
             # never the device token (that one may travel over a tunnel).
@@ -469,6 +500,8 @@ def _auth_middleware(token: str, internal_secret: str):
         if not hmac.compare_digest(got, expected):
             log.warning("rejected request from %s to %s", request.remote, request.path)
             raise web.HTTPUnauthorized(text="bad token")
+        if bridge is not None and request.path != "/api/activity":
+            bridge.last_seen = {"t": time.time(), "ip": request.remote or "", "path": request.path}
         return await handler(request)
 
     return auth
@@ -484,12 +517,15 @@ def create_app(cfg: Config, agents, transcriber, desktop, chat=None) -> web.Appl
     host = "127.0.0.1" if cfg.host in ("", "0.0.0.0", "::") else cfg.host
     bridge.agent.approval = (f"http://{host}:{cfg.port}/internal/permission", internal_secret)
     app = web.Application(
-        middlewares=[_auth_middleware(cfg.token, internal_secret)], client_max_size=4 * 1024 * 1024
+        middlewares=[_auth_middleware(cfg.token, internal_secret, bridge)], client_max_size=4 * 1024 * 1024
     )
     app[BRIDGE_KEY] = bridge
     app[INTERNAL_SECRET_KEY] = internal_secret
     app.add_routes(
         [
+            web.get("/", bridge.dashboard),
+            web.get("/ui", bridge.dashboard),
+            web.get("/api/activity", bridge.activity),
             web.get("/api/status", bridge.status),
             web.post("/api/voice", bridge.voice),
             web.post("/api/text", bridge.text),

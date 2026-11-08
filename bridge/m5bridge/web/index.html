@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>m5v1 · мост</title>
+<style>
+  :root {
+    --bg: #03070c; --panel: rgba(6, 22, 34, 0.78); --line: rgba(54, 228, 255, 0.28);
+    --cyan: #36e4ff; --ink: #eaf6ff; --dim: #6f8ea0; --warm: #ffc56b; --ok: #3dff9a; --bad: #ff5d6c; --ask: #ffe14d;
+    --mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    --sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); font-family: var(--sans); min-height: 100%; }
+  body {
+    background:
+      radial-gradient(ellipse 60% 50% at 40% 40%, rgba(10, 34, 51, 0.85), transparent 70%),
+      linear-gradient(rgba(54, 228, 255, 0.035) 1px, transparent 1px) 0 0 / 48px 48px,
+      linear-gradient(90deg, rgba(54, 228, 255, 0.035) 1px, transparent 1px) 0 0 / 48px 48px,
+      var(--bg);
+  }
+  header { display: flex; align-items: center; gap: 18px; padding: 18px 28px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .brand { font-weight: 800; font-size: 26px; letter-spacing: -0.02em; }
+  .brand span { color: var(--cyan); font-weight: 400; }
+  .hud { font-family: var(--mono); font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--cyan); }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; font-family: var(--mono); font-size: 13px; color: var(--dim); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); box-shadow: 0 0 0 0 transparent; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+  .dot.off { background: var(--bad); }
+  .spacer { flex: 1; }
+  button { font: inherit; color: var(--ink); background: rgba(54, 228, 255, 0.08); border: 1px solid var(--line); border-radius: 10px; padding: 8px 14px; cursor: pointer; }
+  button:hover { border-color: var(--cyan); }
+  button.active { background: rgba(54, 228, 255, 0.22); border-color: var(--cyan); }
+  main { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(320px, 1fr); gap: 22px; padding: 22px 28px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 18px 20px; backdrop-filter: blur(6px); }
+  .card h2 { font-family: var(--mono); font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--cyan); font-weight: 500; margin-bottom: 12px; }
+  #stage { position: relative; padding: 8px; }
+  #flow { width: 100%; height: auto; display: block; }
+  .node-label { font-family: var(--mono); font-size: 15px; letter-spacing: 0.14em; fill: var(--cyan); text-transform: uppercase; }
+  .node-sub { font-family: var(--sans); font-size: 14px; fill: var(--dim); }
+  .link { stroke: var(--line); stroke-width: 2; fill: none; stroke-dasharray: 3 9; }
+  .link.hot { stroke: var(--cyan); stroke-dasharray: none; filter: drop-shadow(0 0 6px rgba(54,228,255,.8)); }
+  .node-ring { fill: rgba(6, 22, 34, 0.9); stroke: var(--line); stroke-width: 2; transition: stroke .3s, filter .3s; }
+  .node.hot .node-ring { stroke: var(--cyan); filter: drop-shadow(0 0 10px rgba(54,228,255,.7)); }
+  .node.ask .node-ring { stroke: var(--ask); filter: drop-shadow(0 0 12px rgba(255,225,77,.8)); }
+  .node.ok .node-ring { stroke: var(--ok); filter: drop-shadow(0 0 12px rgba(61,255,154,.8)); }
+  .node.bad .node-ring { stroke: var(--bad); }
+  .spin { transform-box: fill-box; transform-origin: center; animation: spin 14s linear infinite; }
+  .spin.rev { animation-duration: 22s; animation-direction: reverse; }
+  .busy .spin { animation-duration: 3s; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #stage-status { position: absolute; left: 0; right: 0; bottom: 14px; text-align: center; font-size: 18px; color: var(--ink); min-height: 26px; }
+  #now .cmd { font-size: 24px; font-weight: 700; color: var(--warm); min-height: 32px; word-break: break-word; }
+  #now .meta { margin: 10px 0 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--cyan); }
+  .chip.done { color: var(--ok); border-color: rgba(61,255,154,.4); }
+  .chip.error, .chip.cancelled { color: var(--bad); border-color: rgba(255,93,108,.4); }
+  .chip.confirm, .chip.approve { color: var(--ask); border-color: rgba(255,225,77,.5); }
+  #steps { font-family: var(--mono); font-size: 14px; line-height: 1.75; max-height: 260px; overflow: auto; color: #a8e3f2; }
+  #steps div { animation: rise .35s ease-out both; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #steps div::before { content: "› "; color: var(--cyan); }
+  @keyframes rise { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+  #reply { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); white-space: pre-wrap; line-height: 1.5; min-height: 24px; }
+  #ask { margin-top: 12px; color: var(--ask); font-family: var(--mono); font-size: 14px; }
+  #history { grid-column: 1 / -1; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  td, th { text-align: left; padding: 9px 10px; border-bottom: 1px solid rgba(54,228,255,.12); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); font-weight: 500; }
+  td.t { color: var(--dim); font-family: var(--mono); white-space: nowrap; }
+  td.txt { color: var(--warm); }
+  td.rep { color: #c8dde7; max-width: 520px; }
+  #login { display: none; max-width: 460px; margin: 80px auto; }
+  #login input { width: 100%; margin: 12px 0; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); background: #02060a; color: var(--ink); font-family: var(--mono); }
+  .empty { color: var(--dim); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 14px 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">m5v1 <span>· мост</span></div>
+  <span class="pill"><span id="link-dot" class="dot"></span><span id="link-text">подключаюсь…</span></span>
+  <span class="pill"><span id="dev-dot" class="dot"></span><span id="dev-text">Cardputer: —</span></span>
+  <span class="spacer"></span>
+  <span class="hud" id="bridge-name"></span>
+  <button id="demo-btn" title="Показать работу моста на примерах, без настоящих команд">Демо</button>
+</header>
+
+<section id="login" class="card">
+  <h2>Доступ к мосту</h2>
+  <p>Панель открыта не с этого компьютера. Введите токен моста из <code>bridge/config.toml</code> ([server] token).</p>
+  <input id="token" type="password" autocomplete="off" placeholder="токен" />
+  <button id="token-save">Подключиться</button>
+</section>
+
+<main id="app">
+  <section class="card" id="stage">
+    <h2>Поток команды</h2>
+    <svg id="flow" viewBox="0 0 960 520" aria-label="Схема: Cardputer, мост, агенты">
+      <defs>
+        <radialGradient id="core" cx="50%" cy="50%" r="50%">
+          <stop offset="0" stop-color="#36e4ff" stop-opacity=".95" />
+          <stop offset=".6" stop-color="#36e4ff" stop-opacity=".25" />
+          <stop offset="1" stop-color="#36e4ff" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+      <!-- links: device -> bridge -> each target -->
+      <path id="l-dev" class="link" d="M 175 260 C 260 260, 300 260, 400 260" />
+      <path id="l-claude" class="link" d="M 560 260 C 640 260, 650 90, 760 90" />
+      <path id="l-codex" class="link" d="M 560 260 C 640 260, 650 205, 760 205" />
+      <path id="l-window" class="link" d="M 560 260 C 640 260, 650 320, 760 320" />
+      <path id="l-pc" class="link" d="M 560 260 C 640 260, 650 435, 760 435" />
+
+      <!-- Cardputer -->
+      <g id="n-dev" class="node">
+        <circle class="node-ring" cx="110" cy="260" r="64" />
+        <g transform="translate(70 232)">
+          <rect x="0" y="0" width="80" height="56" rx="8" fill="#d9dde2" />
+          <rect x="22" y="6" width="36" height="18" rx="3" fill="#0b1a24" />
+          <rect x="25" y="9" width="30" height="4" fill="#36e4ff" opacity=".9" />
+          <g fill="#2b2f36"><rect x="6" y="30" width="68" height="5" rx="2" /><rect x="6" y="38" width="68" height="5" rx="2" /><rect x="6" y="46" width="68" height="5" rx="2" /></g>
+        </g>
+        <text class="node-label" x="110" y="352" text-anchor="middle">Cardputer</text>
+        <text class="node-sub" id="dev-sub" x="110" y="374" text-anchor="middle">голос · текст</text>
+      </g>
+
+      <!-- the bridge -->
+      <g id="n-bridge" class="node">
+        <circle cx="480" cy="260" r="118" fill="url(#core)" opacity=".18" />
+        <circle class="node-ring" cx="480" cy="260" r="80" />
+        <circle class="spin" cx="480" cy="260" r="98" fill="none" stroke="#36e4ff" stroke-width="2" stroke-dasharray="14 10" opacity=".7" />
+        <circle class="spin rev" cx="480" cy="260" r="110" fill="none" stroke="#36e4ff" stroke-width="6" stroke-dasharray="1.5 12" opacity=".45" />
+        <circle id="bridge-core" cx="480" cy="260" r="30" fill="#36e4ff" opacity=".85" />
+        <text class="node-label" x="480" y="410" text-anchor="middle">Мост</text>
+        <text class="node-sub" id="bridge-sub" x="480" y="432" text-anchor="middle">распознавание · маршрутизация</text>
+      </g>
+
+      <!-- targets -->
+      <g id="n-claude" class="node"><circle class="node-ring" cx="800" cy="90" r="36" /><text class="node-label" x="850" y="86">Claude</text><text class="node-sub" x="850" y="106">агент Claude Code</text></g>
+      <g id="n-codex" class="node"><circle class="node-ring" cx="800" cy="205" r="36" /><text class="node-label" x="850" y="201">Codex</text><text class="node-sub" x="850" y="221">агент Codex</text></g>
+      <g id="n-window" class="node"><circle class="node-ring" cx="800" cy="320" r="36" /><text class="node-label" x="850" y="316">Окно</text><text class="node-sub" id="window-sub" x="850" y="336">окно ПК</text></g>
+      <g id="n-pc" class="node"><circle class="node-ring" cx="800" cy="435" r="36" /><text class="node-label" x="850" y="431">ПК</text><text class="node-sub" x="850" y="451">клавиатура · команды</text></g>
+      <g fill="#36e4ff" font-family="Consolas, monospace" font-size="20" text-anchor="middle" dominant-baseline="central">
+        <text x="800" y="90">C</text><text x="800" y="205">X</text><text x="800" y="320">▣</text><text x="800" y="435">⌨</text>
+      </g>
+      <g id="pulses"></g>
+    </svg>
+    <div id="stage-status"></div>
+  </section>
+
+  <section class="card" id="now">
+    <h2>Сейчас</h2>
+    <div class="cmd" id="now-cmd"><span class="empty">ждём команду с Cardputer…</span></div>
+    <div class="meta" id="now-meta"></div>
+    <div id="steps"></div>
+    <div id="ask"></div>
+    <div id="reply"></div>
+  </section>
+
+  <section class="card" id="history">
+    <h2>Последние задачи</h2>
+    <table><thead><tr><th>Время</th><th>Режим</th><th>Команда</th><th>Итог</th><th>Ответ</th></tr></thead><tbody id="hist"></tbody></table>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var MODE = { claude: "claude", agent: "claude", codex: "codex", window: "window", desktop: "window", type: "pc" };
+  var MODE_RU = { claude: "Claude", agent: "Claude", codex: "Codex", window: "Окно", desktop: "Окно", type: "Диктовка" };
+  var STATE_RU = { queued: "в очереди", transcribing: "распознаю речь", confirm: "ждёт Enter", running: "выполняется",
+                   approve: "ждёт разрешения", done: "готово", error: "ошибка", cancelled: "отменено" };
+  var $ = function (id) { return document.getElementById(id); };
+  var svgns = "http://www.w3.org/2000/svg";
+  var token = localStorage.getItem("m5v1-token") || "";
+  var demo = false, demoTimer = null;
+  var seen = {};              // job id -> {state, steps}
+  var current = null;         // job shown in "Сейчас"
+
+  // ---- pulses: a dot travelling along a link --------------------------------
+  function pulse(linkId, reverse, color, dur) {
+    var path = $(linkId); if (!path) return;
+    var len = path.getTotalLength(), dot = document.createElementNS(svgns, "circle");
+    dot.setAttribute("r", 7); dot.setAttribute("fill", color || "#eaf6ff");
+    dot.style.filter = "drop-shadow(0 0 8px " + (color || "#36e4ff") + ")";
+    $("pulses").appendChild(dot);
+    var t0 = performance.now(), d = dur || 900;
+    (function step(now) {
+      var p = Math.min(1, (now - t0) / d), e = p < .5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      var pt = path.getPointAtLength(len * (reverse ? 1 - e : e));
+      dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y);
+      if (p < 1) requestAnimationFrame(step); else dot.remove();
+    })(t0);
+  }
+  function chain(steps) { // [[link, reverse, color, dur], ...] one after another
+    var delay = 0;
+    steps.forEach(function (s) { setTimeout(function () { pulse(s[0], s[1], s[2], s[3]); }, delay); delay += (s[3] || 900) * 0.8; });
+  }
+  function flash(nodeId, cls, ms) {
+    var n = $(nodeId); if (!n) return;
+    n.classList.add(cls); setTimeout(function () { n.classList.remove(cls); }, ms || 1400);
+  }
+
+  // ---- drawing the state ---------------------------------------------------
+  function setHot(target, on) {
+    ["claude", "codex", "window", "pc"].forEach(function (k) {
+      $("n-" + k).classList.toggle("hot", on && k === target);
+      $("l-" + k).classList.toggle("hot", on && k === target);
+    });
+    $("n-bridge").classList.toggle("busy", !!on);
+  }
+  function showNow(job) {
+    current = job;
+    var text = job.transcript || (job.state === "transcribing" ? "…" : "");
+    $("now-cmd").textContent = text ? "«" + text + "»" : "…";
+    $("now-meta").innerHTML = '<span class="chip">' + (MODE_RU[job.mode] || job.mode) + '</span><span class="chip ' + job.state + '">' + (STATE_RU[job.state] || job.state) + "</span>";
+    var box = $("steps"), have = box.children.length, steps = job.steps || [];
+    if (box.dataset.job !== job.id) { box.innerHTML = ""; have = 0; box.dataset.job = job.id; }
+    for (var i = have; i < steps.length; i++) { var d = document.createElement("div"); d.textContent = steps[i]; d.title = steps[i]; box.appendChild(d); }
+    box.scrollTop = box.scrollHeight;
+    $("ask").textContent = job.state === "approve" ? "? Разрешить: " + job.approval + "  (Enter / A / Esc на Cardputer)" :
+                           job.state === "confirm" ? "Cardputer ждёт Enter, чтобы выполнить голосовую команду" : "";
+    $("reply").textContent = job.state === "done" ? job.reply : job.state === "error" ? "Ошибка: " + job.error : "";
+    $("stage-status").textContent = STATE_RU[job.state] ? (MODE_RU[job.mode] || "") + " · " + STATE_RU[job.state] : "";
+  }
+  function onJob(job) {
+    var target = MODE[job.mode] || "claude", prev = seen[job.id];
+    if (!prev) {                       // a new command arrived from the device
+      chain([["l-dev", false, "#ffc56b", 800]]);
+      flash("n-dev", "hot", 1000);
+      prev = seen[job.id] = { state: "", steps: 0 };
+    }
+    var running = job.state === "running" || job.state === "approve";
+    if (job.state !== prev.state) {
+      if (job.state === "running" && prev.state !== "approve") chain([["l-" + target, false, "#36e4ff", 900]]);
+      if (job.state === "approve") flash("n-" + target, "ask", 4000);
+      if (job.state === "confirm") flash("n-dev", "ask", 4000);
+      if (job.state === "done") { chain([["l-" + target, true, "#3dff9a", 800], ["l-dev", true, "#3dff9a", 800]]); flash("n-dev", "ok", 1800); flash("n-" + target, "ok", 1400); }
+      if (job.state === "error") { flash("n-bridge", "bad", 1800); }
+    }
+    var n = (job.steps || []).length;
+    if (n > prev.steps && running) { for (var i = prev.steps; i < n; i++) setTimeout(function () { pulse("l-" + target, true, "#a8e3f2", 700); }, (i - prev.steps) * 250); }
+    prev.state = job.state; prev.steps = Math.max(prev.steps, job.step_count || n);
+    return running || job.state === "transcribing" || job.state === "confirm" ? target : null;
+  }
+  function ago(t, now) { var s = Math.max(0, Math.round(now - t)); return s < 60 ? s + " с" : s < 3600 ? Math.round(s / 60) + " мин" : Math.round(s / 3600) + " ч"; }
+  function render(data) {
+    $("bridge-name").textContent = data.name + " · v" + data.version;
+    var dev = data.device || {}, fresh = dev.t && data.now - dev.t < 20;
+    $("dev-dot").className = "dot " + (fresh ? "on" : dev.t ? "off" : "");
+    $("dev-text").textContent = dev.t ? "Cardputer: " + (fresh ? "на связи" : "был " + ago(dev.t, data.now) + " назад") + (dev.ip ? " · " + dev.ip : "") : "Cardputer: ещё не подключался";
+    $("window-sub").textContent = data.window ? data.window.slice(0, 26) : "окно ПК";
+    var jobs = (data.jobs || []).slice().sort(function (a, b) { return a.created - b.created; });
+    var active = null;
+    jobs.forEach(function (j) { var t = onJob(j); if (t) active = j; });
+    var last = jobs[jobs.length - 1];
+    var shown = active || last;
+    if (shown) showNow(shown);
+    setHot(active ? MODE[active.mode] || "claude" : null, !!active);
+    $("hist").innerHTML = jobs.slice().reverse().map(function (j) {
+      var esc = function (s) { return String(s || "").replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
+      return "<tr><td class=t>" + ago(j.created, data.now) + "</td><td><span class=chip>" + esc(MODE_RU[j.mode] || j.mode) + "</span></td><td class=txt>" + esc(j.transcript) +
+             "</td><td><span class='chip " + j.state + "'>" + esc(STATE_RU[j.state] || j.state) + "</span></td><td class=rep>" + esc((j.reply || j.error || "").slice(0, 160)) + "</td></tr>";
+    }).join("") || "<tr><td colspan=5 class=empty>Пока пусто. Отправьте команду с Cardputer или нажмите «Демо».</td></tr>";
+  }
+
+  // ---- talking to the bridge -------------------------------------------------
+  function poll() {
+    if (demo) return;
+    var headers = token ? { Authorization: "Bearer " + token } : {};
+    fetch("/api/activity", { headers: headers, cache: "no-store" }).then(function (r) {
+      if (r.status === 401) { $("login").style.display = "block"; $("app").style.display = "none"; throw new Error("auth"); }
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    }).then(function (data) {
+      $("login").style.display = "none"; $("app").style.display = "";
+      $("link-dot").className = "dot on"; $("link-text").textContent = "мост на связи";
+      render(data);
+    }).catch(function (e) {
+      if (String(e.message) !== "auth") { $("link-dot").className = "dot off"; $("link-text").textContent = "нет связи с мостом"; }
+    });
+  }
+  $("token-save").onclick = function () { token = $("token").value.trim(); localStorage.setItem("m5v1-token", token); poll(); };
+
+  // ---- demo: the same drawing, fed by a script ------------------------------
+  var SCRIPT = [
+    { mode: "window", transcript: "Включи мою волну", steps: ["Окно: Chrome", "Яндекс Музыка: Моя волна ▶"], reply: "Готово: играет «Моя волна»." },
+    { mode: "codex", transcript: "Запусти Blender", steps: ["ищу Blender на компьютере", "Bash: start blender"], reply: "Blender открыт." },
+    { mode: "claude", transcript: "Проверь черновики в почте", steps: ["ToolSearch", "Gmail: list_drafts"], approval: "Gmail: list_drafts", reply: "В черновиках 2 письма." },
+    { mode: "claude", transcript: "Создай макет в Figma", steps: ["Figma: новый файл «Лендинг»", "заголовок, текст, кнопка", "Figma: экспорт ссылки"], reply: "Макет готов, ссылка на экране." },
+  ];
+  function runDemo() {
+    var now = Date.now() / 1000, jobs = [], k = 0, i = 0;
+    function frame(job) { render({ now: Date.now() / 1000, name: "демо", version: "", device: { t: Date.now() / 1000, ip: "192.168.137.79" }, window: "chrome: Яндекс Музыка", jobs: jobs.slice() }); }
+    function next() {
+      if (!demo) return;
+      var s = SCRIPT[k % SCRIPT.length], id = "demo-" + (i++);
+      var job = { id: id, mode: s.mode, state: "transcribing", transcript: "", steps: [], step_count: 0, reply: "", error: "", approval: "", created: Date.now() / 1000 };
+      jobs.push(job); if (jobs.length > 8) jobs.shift(); k++;
+      var plan = [[600, function () { job.transcript = s.transcript; job.state = "confirm"; }],
+                  [1300, function () { job.state = "running"; }]];
+      s.steps.forEach(function (st, n) {
+        plan.push([900, function () { job.steps.push(st); job.step_count = job.steps.length; }]);
+        if (s.approval && n === 0) { plan.push([700, function () { job.state = "approve"; job.approval = s.approval; }]); plan.push([1800, function () { job.state = "running"; job.approval = ""; }]); }
+      });
+      plan.push([900, function () { job.state = "done"; job.reply = s.reply; }]);
+      var t = 0;
+      plan.forEach(function (p) { t += p[0]; demoTimer = setTimeout(function () { if (!demo) return; p[1](); frame(); }, t); });
+      frame();
+      demoTimer = setTimeout(next, t + 2600);
+    }
+    next();
+  }
+  $("demo-btn").onclick = function () {
+    demo = !demo; this.classList.toggle("active", demo); this.textContent = demo ? "Демо: вкл" : "Демо";
+    seen = {}; $("steps").innerHTML = ""; $("steps").dataset.job = "";
+    if (demo) { $("link-dot").className = "dot on"; $("link-text").textContent = "демо-режим"; runDemo(); } else { clearTimeout(demoTimer); poll(); }
+  };
+
+  poll();
+  setInterval(poll, 700);
+})();
+</script>
+</body>
+</html>
