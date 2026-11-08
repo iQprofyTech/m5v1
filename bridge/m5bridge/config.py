@@ -56,6 +56,22 @@ backend = "cli"           # cli = claude -p in workdir; desktop = AGENT mode als
 [desktop]
 window_title = "Claude"   # title of the Claude Desktop window to type into
 press_enter = true
+
+[codex]
+bin = ""                  # empty = codex in PATH or the one bundled with the Codex app
+sandbox = "workspace-write"   # read-only / workspace-write / danger-full-access
+                          # (on Windows workspace-write may ask for admin rights via UAC: use danger-full-access)
+args = []                 # extra `codex exec` arguments, e.g. ["-m", "gpt-5"]
+
+[window]
+reply_timeout = 180       # seconds to wait for an answer to appear in the chosen window
+settle_sec = 6            # the answer is complete when the window text stops changing this long
+
+# Quick PC commands for the Cardputer menu (Fn+P), in addition to the built-in ones
+# (volume, media, lock, Alt+Tab, show desktop...). Name = shell command.
+[commands]
+# "Открыть браузер" = "start firefox"
+# "Проводник" = "explorer"
 """
 
 
@@ -89,6 +105,15 @@ class Config:
     desktop_window_title: str = "Claude"
     desktop_press_enter: bool = True
 
+    codex_bin: str = ""
+    codex_sandbox: str = "workspace-write"
+    codex_args: list[str] = field(default_factory=list)
+
+    window_reply_timeout: int = 180
+    window_settle_sec: float = 6.0
+
+    commands: dict[str, str] = field(default_factory=dict)
+
     state_path: Path = DEFAULT_STATE_PATH
 
 
@@ -110,6 +135,8 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
     speech = data.get("speech", {})
     agent = data.get("agent", {})
     desktop = data.get("desktop", {})
+    codex = data.get("codex", {})
+    window = data.get("window", {})
 
     cfg = Config(
         host=server.get("host", "0.0.0.0"),
@@ -136,6 +163,12 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         agent_backend=str(agent.get("backend", "cli")),
         desktop_window_title=desktop.get("window_title", "Claude"),
         desktop_press_enter=bool(desktop.get("press_enter", True)),
+        codex_bin=str(codex.get("bin", "")),
+        codex_sandbox=str(codex.get("sandbox", "workspace-write")),
+        codex_args=[str(a) for a in codex.get("args", [])],
+        window_reply_timeout=int(window.get("reply_timeout", 180)),
+        window_settle_sec=float(window.get("settle_sec", 6)),
+        commands={str(k): str(v) for k, v in data.get("commands", {}).items()},
         state_path=path.parent / "state.json",
     )
     if len(cfg.token) < 16:

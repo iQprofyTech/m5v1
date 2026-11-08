@@ -1,11 +1,14 @@
-// m5v1: voice / keyboard remote for Claude on a PC, running on M5Stack Cardputer-Adv.
+// m5v1: voice / keyboard remote for a PC, running on M5Stack Cardputer-Adv.
+//
+// Modes (Tab, or Fn+Tab in KEYS): CLAUDE agent, CODEX agent, WINDOW (a chosen PC window,
+// e.g. an open chat), KEYS (the Cardputer is the PC's keyboard and mouse).
 //
 //   G0 (hold)        push-to-talk          Fn+Space   start/stop recording
-//   type + Enter     send text             Tab        switch Agent / Desktop mode
-//   Fn+; / Fn+.      scroll up / down      Fn+N       new agent session
-//   Fn+L             pick agent session    Fn+W       Wi-Fi networks
-//   Fn+R             reconnect             Fn+` (Esc) cancel current job
-//   Fn+H             help
+//   type + Enter     send text             Fn+O       choose PC window
+//   Fn+P             quick PC commands     Fn+; / .   scroll up / down
+//   Fn+N             new agent session     Fn+L       pick agent session
+//   Fn+W             Wi-Fi networks        Fn+R       reconnect
+//   Fn+` (Esc)       cancel current job    Fn+H       help
 
 #include <ArduinoJson.h>
 #include <M5Cardputer.h>
@@ -32,7 +35,7 @@ static VoiceUpload upload;
 
 // --- app state --------------------------------------------------------------
 
-enum class Screen { Main, Wifi, WifiPass, Sessions, Help };
+enum class Screen { Main, Wifi, WifiPass, Sessions, Windows, Commands, Help };
 static Screen screen = Screen::Main;
 
 static String input;
@@ -59,7 +62,37 @@ static String passSsid;
 
 static String serialLine;
 
-static const char* modeName() { return gCfg.mode == Mode::Agent ? "AGENT" : "DESK"; }
+static String winTitle;  // PC window chosen for WINDOW mode
+
+static const char* modeName() {
+  switch (gCfg.mode) {
+    case Mode::Codex: return "CODEX";
+    case Mode::Window: return "ОКНО";
+    case Mode::Keys: return "КЛАВ";
+    default: return "CLAUDE";
+  }
+}
+
+// Mode name in the bridge API. Voice in KEYS mode is dictation typed into the active window.
+static const char* modeApi() {
+  switch (gCfg.mode) {
+    case Mode::Codex: return "codex";
+    case Mode::Window: return "window";
+    case Mode::Keys: return "type";
+    default: return "claude";
+  }
+}
+
+static const char* agentApi() { return gCfg.mode == Mode::Codex ? "codex" : "claude"; }
+
+static const char* modeHint() {
+  switch (gCfg.mode) {
+    case Mode::Codex: return "Режим: агент Codex";
+    case Mode::Window: return "Режим: окно ПК (Fn+O - выбрать окно)";
+    case Mode::Keys: return "Режим: клавиатура и мышь ПК (Fn+H - клавиши)";
+    default: return "Режим: агент Claude Code";
+  }
+}
 
 static void drawStatus() {
   String left = String(modeName()) + " ";
@@ -84,10 +117,16 @@ static void drawIdleInput() {
     } else if (!jobActivity.isEmpty()) {
       uiDrawInput("> " + jobActivity, TFT_CYAN);
     } else {
-      uiDrawInput("Claude работает... (Esc - отмена)", TFT_CYAN);
+      uiDrawInput("Работаю... (Esc - отмена)", TFT_CYAN);
     }
+  } else if (!gServer.valid) {
+    uiDrawInput("> " + netStatus, TFT_DARKGREY);
+  } else if (gCfg.mode == Mode::Keys) {
+    uiDrawInput("> клавиши идут на ПК, G0 - диктовка", TFT_DARKGREY);
+  } else if (input.isEmpty() && gCfg.mode == Mode::Window) {
+    uiDrawInput(winTitle.isEmpty() ? "> Fn+O - выбрать окно" : "> в окно: " + winTitle, TFT_DARKGREY);
   } else if (input.isEmpty()) {
-    uiDrawInput(gServer.valid ? "> держи G0 и говори, или пиши" : "> " + netStatus, TFT_DARKGREY);
+    uiDrawInput("> держи G0 и говори, или пиши", TFT_DARKGREY);
   } else {
     uiDrawInput("> " + input + "_", TFT_WHITE);
   }
@@ -95,15 +134,26 @@ static void drawIdleInput() {
 
 static void showHelp() {
   screen = Screen::Help;
+  if (gCfg.mode == Mode::Keys) {
+    uiDrawLines("КЛАВ: клавиши ПК (любая - назад)", {
+        "буквы, Enter, Del, Tab - на ПК",
+        "Ctrl/Alt+буква - сочетание",
+        "Fn+; . , / - стрелки, Fn+` - Esc",
+        "Opt+; . , / - мышь, Opt+Enter клик",
+        "Opt+Space - правый, Opt+[ ] - скролл",
+        "G0 - диктовка, Fn+Tab - режим",
+        "Fn+P команды ПК, Fn+O окна",
+    });
+    return;
+  }
   uiDrawLines("Клавиши (любая - назад)", {
-      "G0 удерж. / Fn+Space - голос",
-      "Enter - отправить / подтвердить",
+      "G0 / Fn+Space - голос, Enter - ок",
+      "Tab - CLAUDE/CODEX/ОКНО/КЛАВ",
+      "Fn+O окно ПК, Fn+P команды ПК",
       "Запрос агента: Enter/A/Esc",
-      "Tab - режим Agent/Desktop",
       "Fn+; Fn+. - прокрутка",
-      "Fn+N новая сессия, Fn+L список",
-      "Fn+W Wi-Fi, Fn+R переподкл.",
-      "Fn+` (Esc) - отменить задачу",
+      "Fn+N нов. сессия, Fn+L сессии",
+      "Fn+W Wi-Fi, Fn+R, Fn+` - отмена",
   });
 }
 
@@ -198,7 +248,7 @@ static void sendText(const String& text) {
   }
   JsonDocument doc;
   doc["text"] = text;
-  doc["mode"] = gCfg.mode == Mode::Agent ? "agent" : "desktop";
+  doc["mode"] = modeApi();
   String body, resp;
   serializeJson(doc, body);
   uiLogAdd(TFT_CYAN, "Вы: " + text);
@@ -333,7 +383,7 @@ static void startRecording(bool pushToTalk) {
     uiLogAdd(TFT_RED, "Нет связи с мостом (Fn+R)");
     return;
   }
-  String query = gCfg.mode == Mode::Agent ? "?mode=agent" : "?mode=desktop";
+  String query = String("?mode=") + modeApi();
   if (!upload.begin(query, kSampleRate)) {
     uiLogAdd(TFT_RED, "Не удалось открыть соединение");
     return;
@@ -432,7 +482,7 @@ static void openSessionsMenu() {
     return;
   }
   String resp;
-  if (apiRequest("GET", "/api/sessions", "", resp) != 200) {
+  if (apiRequest("GET", String("/api/sessions?agent=") + agentApi(), "", resp) != 200) {
     uiLogAdd(TFT_RED, "Не удалось получить сессии");
     return;
   }
@@ -446,7 +496,162 @@ static void openSessionsMenu() {
   }
   screen = Screen::Sessions;
   menuSel = 0;
-  uiDrawMenu("Сессии агента: Enter / Esc", menuItems, menuSel);
+  uiDrawMenu(String("Сессии ") + agentApi() + ": Enter / Esc", menuItems, menuSel);
+}
+
+// --- PC windows and commands --------------------------------------------------
+
+static void openWindowsMenu() {
+  if (!gServer.valid) {
+    uiLogAdd(TFT_RED, "Нет связи с мостом");
+    return;
+  }
+  String resp;
+  if (apiRequest("GET", "/api/windows", "", resp) != 200) {
+    uiLogAdd(TFT_RED, "Не удалось получить окна ПК");
+    return;
+  }
+  JsonDocument doc;
+  deserializeJson(doc, resp);
+  long selected = doc["selected"] | 0L;
+  menuItems.clear();
+  menuIds.clear();
+  for (JsonObject w : doc["windows"].as<JsonArray>()) {
+    long id = w["id"] | 0L;
+    menuItems.push_back(String(id == selected ? "> " : "  ") + w["app"].as<String>() + ": " + w["title"].as<String>());
+    menuIds.push_back(String(id));
+  }
+  screen = Screen::Windows;
+  menuSel = 0;
+  uiDrawMenu("Окно ПК: Enter / Esc", menuItems, menuSel);
+}
+
+static void selectWindow(int index) {
+  JsonDocument doc;
+  doc["id"] = menuIds[index].toInt();
+  String body, resp;
+  serializeJson(doc, body);
+  int code = apiRequest("POST", "/api/windows/select", body, resp);
+  String label = menuItems[index].substring(2);
+  backToMain();
+  if (code == 200) {
+    winTitle = label;
+    if (gCfg.mode != Mode::Window && gCfg.mode != Mode::Keys) {
+      gCfg.mode = Mode::Window;
+      cfgSave();
+    }
+    uiLogAdd(TFT_GREEN, "Окно: " + label);
+    drawStatus();
+    drawIdleInput();
+  } else {
+    uiLogAdd(TFT_RED, "Окно не выбрано: " + String(code));
+  }
+}
+
+static void openCommandsMenu() {
+  if (!gServer.valid) {
+    uiLogAdd(TFT_RED, "Нет связи с мостом");
+    return;
+  }
+  String resp;
+  if (apiRequest("GET", "/api/commands", "", resp) != 200) {
+    uiLogAdd(TFT_RED, "Не удалось получить команды");
+    return;
+  }
+  JsonDocument doc;
+  deserializeJson(doc, resp);
+  menuItems.clear();
+  menuIds.clear();
+  for (JsonVariant c : doc["commands"].as<JsonArray>()) {
+    menuItems.push_back(c.as<String>());
+    menuIds.push_back(c.as<String>());
+  }
+  screen = Screen::Commands;
+  menuSel = 0;
+  uiDrawMenu("Команды ПК: Enter / Esc", menuItems, menuSel);
+}
+
+static void runCommand(int index) {
+  JsonDocument doc;
+  doc["name"] = menuIds[index];
+  String body, resp;
+  serializeJson(doc, body);
+  int code = apiRequest("POST", "/api/commands/run", body, resp);
+  if (code == 200) {
+    uiDrawMenu("Выполнено: " + menuIds[index], menuItems, menuSel);  // stay for repeats (volume)
+  } else {
+    uiDrawMenu("Ошибка " + String(code) + ": " + menuIds[index], menuItems, menuSel);
+  }
+}
+
+// --- KEYS mode: the Cardputer as the PC's keyboard and mouse -------------------
+
+static bool hasChar(const Keyboard_Class::KeysState& k, char c);
+
+static void sendInput(JsonDocument& doc) {
+  String body, resp;
+  serializeJson(doc, body);
+  int code = apiRequest("POST", "/api/input", body, resp, 3000);
+  if (code != 200) uiDrawInput("ПК не принял ввод: " + String(code), TFT_RED);
+}
+
+static void sendKey(const char* key, bool ctrl = false, bool alt = false, bool shift = false) {
+  JsonDocument doc;
+  doc["key"] = key;
+  JsonArray mods = doc["mods"].to<JsonArray>();
+  if (ctrl) mods.add("ctrl");
+  if (alt) mods.add("alt");
+  if (shift) mods.add("shift");
+  sendInput(doc);
+}
+
+static void sendMouse(int dx, int dy, const char* click = "", int scroll = 0) {
+  JsonDocument doc;
+  doc["dx"] = dx;
+  doc["dy"] = dy;
+  doc["click"] = click;
+  doc["scroll"] = scroll;
+  sendInput(doc);
+}
+
+static void handleKeysMode(const Keyboard_Class::KeysState& k) {
+  static constexpr int kStep = 40;
+  if (k.opt) {  // mouse
+    if (hasChar(k, ';')) sendMouse(0, -kStep);
+    else if (hasChar(k, '.')) sendMouse(0, kStep);
+    else if (hasChar(k, ',')) sendMouse(-kStep, 0);
+    else if (hasChar(k, '/')) sendMouse(kStep, 0);
+    else if (k.enter) sendMouse(0, 0, "left");
+    else if (k.space) sendMouse(0, 0, "right");
+    else if (hasChar(k, '[')) sendMouse(0, 0, "", 3);
+    else if (hasChar(k, ']')) sendMouse(0, 0, "", -3);
+    return;
+  }
+  if (k.enter) return sendKey("enter", k.ctrl, k.alt, k.shift);
+  if (k.del) return sendKey("backspace", k.ctrl, k.alt);
+  if (k.tab) return sendKey("tab", k.ctrl, k.alt, k.shift);
+  if (k.space && (k.ctrl || k.alt)) return sendKey("space", k.ctrl, k.alt);
+  if ((k.ctrl || k.alt) && !k.word.empty()) {
+    char c = static_cast<char>(tolower(static_cast<unsigned char>(k.word.front())));
+    char name[2] = {c, 0};
+    return sendKey(name, k.ctrl, k.alt, k.shift);
+  }
+  String text;
+  for (char c : k.word) text += c;
+  if (k.space && text.isEmpty()) text = " ";
+  if (!text.isEmpty()) {
+    JsonDocument doc;
+    doc["text"] = text;
+    sendInput(doc);
+  }
+}
+
+static void cycleMode() {
+  gCfg.mode = static_cast<Mode>((static_cast<uint8_t>(gCfg.mode) + 1) % kModeCount);
+  cfgSave();
+  uiLogAdd(TFT_YELLOW, modeHint());
+  drawStatus();
+  drawIdleInput();
 }
 
 static void selectSession(const String& id) {
@@ -458,7 +663,7 @@ static void selectSession(const String& id) {
   }
   String body, resp;
   serializeJson(doc, body);
-  int code = apiRequest("POST", "/api/sessions/select", body, resp);
+  int code = apiRequest("POST", String("/api/sessions/select?agent=") + agentApi(), body, resp);
   backToMain();
   if (code == 200) {
     uiLogAdd(TFT_GREEN, id.isEmpty() ? "Новая сессия агента" : "Сессия выбрана");
@@ -484,11 +689,22 @@ static void handleMenuKeys(const Keyboard_Class::KeysState& k) {
   int count = static_cast<int>(menuItems.size());
   if (hasChar(k, ';') && menuSel > 0) --menuSel;
   if (hasChar(k, '.') && menuSel < count - 1) ++menuSel;
-  const String title = screen == Screen::Wifi ? "Wi-Fi: Enter-выбрать Del-забыть Esc" : "Сессии агента: Enter / Esc";
+  String title = "Wi-Fi: Enter-выбрать Del-забыть Esc";
+  if (screen == Screen::Sessions) title = String("Сессии ") + agentApi() + ": Enter / Esc";
+  if (screen == Screen::Windows) title = "Окно ПК: Enter / Esc";
+  if (screen == Screen::Commands) title = "Команды ПК: Enter / Esc";
 
   if (k.enter && count > 0) {
     if (screen == Screen::Sessions) {
       selectSession(menuIds[menuSel]);
+      return;
+    }
+    if (screen == Screen::Windows) {
+      selectWindow(menuSel);
+      return;
+    }
+    if (screen == Screen::Commands) {
+      runCommand(menuSel);
       return;
     }
     // Always ask: a saved network gets its password pre-filled, so Enter alone reconnects
@@ -531,6 +747,19 @@ static void handlePasswordKeys(const Keyboard_Class::KeysState& k) {
 }
 
 static void handleMainKeys(const Keyboard_Class::KeysState& k) {
+  bool keys = gCfg.mode == Mode::Keys && jobId.isEmpty() && !recording;
+  if (k.fn && k.tab) {
+    cycleMode();
+    return;
+  }
+  if (k.fn && keys) {  // arrows and Esc go to the PC
+    if (hasChar(k, ';')) return sendKey("up", k.ctrl, k.alt, k.shift);
+    if (hasChar(k, '.')) return sendKey("down", k.ctrl, k.alt, k.shift);
+    if (hasChar(k, ',')) return sendKey("left", k.ctrl, k.alt, k.shift);
+    if (hasChar(k, '/')) return sendKey("right", k.ctrl, k.alt, k.shift);
+    if (hasChar(k, '`')) return sendKey("esc");
+    if (k.del) return sendKey("delete");
+  }
   if (k.fn) {
     if (k.space) {
       if (recording) {
@@ -558,6 +787,10 @@ static void handleMainKeys(const Keyboard_Class::KeysState& k) {
       connectAll();
     } else if (hasChar(k, 'h')) {
       showHelp();
+    } else if (hasChar(k, 'o')) {
+      openWindowsMenu();
+    } else if (hasChar(k, 'p')) {
+      openCommandsMenu();
     }
     return;
   }
@@ -565,11 +798,12 @@ static void handleMainKeys(const Keyboard_Class::KeysState& k) {
     if (!recPushToTalk) stopRecording();  // any key ends a toggled recording
     return;
   }
+  if (keys) {
+    handleKeysMode(k);
+    return;
+  }
   if (k.tab) {
-    gCfg.mode = gCfg.mode == Mode::Agent ? Mode::Desktop : Mode::Agent;
-    cfgSave();
-    uiLogAdd(TFT_YELLOW, gCfg.mode == Mode::Agent ? "Режим: агент Claude Code" : "Режим: чат Claude Desktop");
-    drawStatus();
+    cycleMode();
     return;
   }
   if (k.enter && !jobId.isEmpty() && jobLastState == "confirm" && input.isEmpty()) {
@@ -618,6 +852,8 @@ static void handleKeyboard() {
       break;
     case Screen::Wifi:
     case Screen::Sessions:
+    case Screen::Windows:
+    case Screen::Commands:
       handleMenuKeys(k);
       break;
     case Screen::WifiPass:

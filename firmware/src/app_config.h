@@ -10,14 +10,17 @@ struct WifiCred {
   String pass;
 };
 
-enum class Mode : uint8_t { Agent = 0, Desktop = 1 };
+// What text and voice are sent to. Values are stored in NVS (0 and 1 keep their old meaning:
+// Claude agent and a PC window).
+enum class Mode : uint8_t { Claude = 0, Window = 1, Codex = 2, Keys = 3 };
+static constexpr uint8_t kModeCount = 4;
 
 struct AppConfig {
   std::vector<WifiCred> wifi;  // known networks, tried strongest-first
   String token;                // bridge bearer token
   String lanUrl;               // optional fixed LAN URL; empty = UDP discovery
   String remoteUrl;            // optional URL reachable from any network (tunnel)
-  Mode mode = Mode::Agent;
+  Mode mode = Mode::Claude;
 };
 
 extern AppConfig gCfg;

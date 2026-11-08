@@ -5,13 +5,20 @@ jobs; the device polls `/api/jobs/{id}` until the job is done.
 
   GET  /api/status                 bridge name, busy flag, current session
   POST /api/voice?mode=&new=        body: raw PCM s16le mono, header X-Sample-Rate
-  POST /api/text                   {"text": "...", "mode": "agent"|"desktop", "new": false}
+  POST /api/text                   {"text": "...", "mode": MODE, "new": false}
+                                   MODE: claude (= agent) | codex | window | desktop
+                                   | type (dictation: typed into the active PC window)
   GET  /api/jobs/{id}              job state / transcript / reply / latest agent steps
   POST /api/jobs/{id}/confirm      run a voice command that waits in state "confirm"
   POST /api/jobs/{id}/approve      {"allow": true|false, "always": false} for state "approve"
   POST /api/jobs/{id}/cancel
-  GET  /api/sessions               recent Claude Code sessions
-  POST /api/sessions/select        {"id": "..."} or {"new": true}
+  GET  /api/sessions?agent=        recent sessions of claude (default) or codex
+  POST /api/sessions/select?agent= {"id": "..."} or {"new": true}
+  GET  /api/windows                open windows of the PC and the selected one
+  POST /api/windows/select         {"id": hwnd}: target of mode "window"
+  POST /api/input                  {"text"} | {"key", "mods", "repeat"} | {"dx", "dy", "click", "scroll"}
+  GET  /api/commands               quick PC commands (built-in + config.toml [commands])
+  POST /api/commands/run           {"name": "..."}
 
   POST /internal/permission        from approval_mcp (loopback + per-run secret): the agent
                                    asks to use a tool; held until the device answers
@@ -35,11 +42,13 @@ from aiohttp import web
 from . import __version__
 from .agent import AgentCancelled, AgentError, describe_tool
 from .config import Config
+from . import pc
 
 log = logging.getLogger(__name__)
 
 MAX_AUDIO_SECONDS = 60
-MODES = ("agent", "desktop")
+MODES = ("agent", "claude", "codex", "desktop", "window", "type")
+AGENT_MODES = ("claude", "codex")
 CONFIRM_TIMEOUT = 120
 APPROVAL_TIMEOUT = 180
 STEPS_SENT = 8  # the device only shows the latest few actions
@@ -77,9 +86,12 @@ class Job:
 
 
 class Bridge:
-    def __init__(self, cfg: Config, agent, transcriber, desktop):
+    def __init__(self, cfg: Config, agents, transcriber, desktop, chat=None):
         self.cfg = cfg
-        self.agent = agent
+        # {"claude": ClaudeAgent, "codex": CodexAgent}; a single agent means Claude only.
+        self.agents = agents if isinstance(agents, dict) else {"claude": agents}
+        self.agent = self.agents.get("claude") or next(iter(self.agents.values()))
+        self.chat = chat
         self.transcriber = transcriber
         self.desktop = desktop
         self.jobs: dict[str, Job] = {}
@@ -88,6 +100,7 @@ class Bridge:
         self.always_allowed: set[str] = set()  # "A" on the device; until the bridge restarts
 
     def _new_job(self, mode: str) -> Job:
+        mode = "claude" if mode == "agent" else mode
         job = Job(id=f"{int(time.time()) % 100000}-{next(self._ids)}", mode=mode)
         self.jobs[job.id] = job
         for old in sorted(self.jobs.values(), key=lambda j: j.created)[:-50]:
@@ -121,7 +134,17 @@ class Bridge:
                 job.transcript = text
 
             job.state = "running"
-            if job.mode == "desktop" or self.cfg.agent_backend == "desktop":
+            if job.mode == "type":
+                await asyncio.to_thread(pc.type_text, text)
+                job.reply = "Напечатано на ПК"
+            elif job.mode == "window":
+                if self.chat is None:
+                    raise pc.PcError("управление окнами недоступно на этом ПК")
+                self._audit(f"> [window {self.chat.title[:30]}] {text}")
+                reply = await self.chat.ask(text, on_step=job.steps.append)
+                job.reply = self._clip(reply) if reply else "Отправлено в окно; новый текст в нём не появился"
+                self._audit(f"  = [window] {reply}")
+            elif job.mode == "desktop" or (job.mode == "claude" and self.cfg.agent_backend == "desktop"):
                 since = time.time()
                 await self.desktop.send(text)
                 job.reply = "Отправлено в Claude Desktop"
@@ -140,9 +163,13 @@ class Bridge:
                         job.reply = self._clip(reply or "(пустой ответ)")
                         self._audit(f"  = [desktop] {reply}")
             else:
-                self.agent_job = job
+                agent = self.agents.get(job.mode)
+                if agent is None:
+                    raise AgentError(f"{job.mode}: агент не найден на ПК")
+                if job.mode == "claude":
+                    self.agent_job = job  # permission prompts come from Claude Code only
                 try:
-                    result = await self.agent.run(text, new_session=new, on_step=job.steps.append)
+                    result = await agent.run(text, new_session=new, on_step=job.steps.append)
                 finally:
                     if self.agent_job is job:
                         self.agent_job = None
@@ -187,8 +214,10 @@ class Bridge:
                 "ok": True,
                 "name": self.cfg.name,
                 "version": __version__,
-                "busy": self.agent.busy,
+                "busy": any(a.busy for a in self.agents.values()),
                 "session": self.agent.current or "",
+                "agents": list(self.agents),
+                "window": self.chat.title if self.chat and self.chat.hwnd else "",
             }
         )
 
@@ -254,8 +283,8 @@ class Bridge:
         job = self._job(request)
         if job.state in ("queued", "transcribing", "confirm", "running", "approve"):
             self._answer(job, False)
-            if job.mode == "agent" and job.state in ("running", "approve"):
-                await self.agent.cancel()
+            if job.mode in AGENT_MODES and job.state in ("running", "approve") and job.mode in self.agents:
+                await self.agents[job.mode].cancel()
             elif job.task:
                 job.task.cancel()
             job.state = "cancelled"
@@ -319,22 +348,90 @@ class Bridge:
                 job.state = "running"
         return web.json_response({"allow": allow})
 
+    def _agent_of(self, request: web.Request):
+        name = request.query.get("agent", "claude")
+        name = "claude" if name == "agent" else name
+        if name not in self.agents:
+            raise web.HTTPNotFound(text=f"no agent {name}")
+        return self.agents[name]
+
     async def sessions(self, request: web.Request) -> web.Response:
-        return web.json_response({"sessions": self.agent.list_sessions()[:10]})
+        return web.json_response({"sessions": self._agent_of(request).list_sessions()[:10]})
 
     async def select_session(self, request: web.Request) -> web.Response:
+        agent = self._agent_of(request)
         try:
             data = await request.json()
         except ValueError:
             raise web.HTTPBadRequest(text="bad json")
         if data.get("new"):
-            self.agent.new_session()
+            agent.new_session()
         else:
             try:
-                self.agent.select_session(str(data.get("id", "")))
+                agent.select_session(str(data.get("id", "")))
             except AgentError as exc:
                 raise web.HTTPNotFound(text=str(exc))
-        return web.json_response({"ok": True, "session": self.agent.current or ""})
+        return web.json_response({"ok": True, "session": agent.current or ""})
+
+    # --- PC control ---------------------------------------------------------
+
+    async def windows(self, request: web.Request) -> web.Response:
+        wins = await asyncio.to_thread(pc.list_windows)
+        selected = self.chat.hwnd if self.chat else None
+        return web.json_response({"windows": wins[:30], "selected": selected or 0})
+
+    async def select_window(self, request: web.Request) -> web.Response:
+        if self.chat is None:
+            raise web.HTTPNotImplemented(text="no window control")
+        try:
+            data = await request.json()
+            hwnd = int(data.get("id", 0))
+        except (ValueError, TypeError):
+            raise web.HTTPBadRequest(text="bad id")
+        try:
+            win = await asyncio.to_thread(self.chat.select, hwnd)
+        except pc.PcError as exc:
+            raise web.HTTPNotFound(text=str(exc))
+        return web.json_response({"ok": True, "window": win})
+
+    async def input(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+        except ValueError:
+            raise web.HTTPBadRequest(text="bad json")
+        try:
+            if data.get("text"):
+                await asyncio.to_thread(pc.type_text, str(data["text"])[:2000])
+            elif data.get("key"):
+                mods = [str(m) for m in data.get("mods") or []]
+                await asyncio.to_thread(pc.press, str(data["key"]), mods, int(data.get("repeat", 1)))
+            else:
+                await asyncio.to_thread(
+                    pc.mouse,
+                    max(-2000, min(2000, int(data.get("dx", 0)))),
+                    max(-2000, min(2000, int(data.get("dy", 0)))),
+                    str(data.get("click", "")),
+                    max(-20, min(20, int(data.get("scroll", 0)))),
+                )
+        except pc.PcError as exc:
+            raise web.HTTPBadRequest(text=str(exc))
+        return web.json_response({"ok": True})
+
+    async def commands(self, request: web.Request) -> web.Response:
+        return web.json_response({"commands": pc.command_names(self.cfg)})
+
+    async def run_command(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+        except ValueError:
+            raise web.HTTPBadRequest(text="bad json")
+        name = str(data.get("name", ""))
+        try:
+            await asyncio.to_thread(pc.run_command, self.cfg, name)
+        except pc.PcError as exc:
+            raise web.HTTPBadRequest(text=str(exc))
+        self._audit(f"> [pc] {name}")
+        return web.json_response({"ok": True, "name": name})
 
 
 def _explain_agent_error(text: str) -> str:
@@ -381,11 +478,11 @@ INTERNAL_SECRET_KEY = web.AppKey("internal_secret", str)
 BRIDGE_KEY = web.AppKey("bridge", Bridge)
 
 
-def create_app(cfg: Config, agent, transcriber, desktop) -> web.Application:
-    bridge = Bridge(cfg, agent, transcriber, desktop)
+def create_app(cfg: Config, agents, transcriber, desktop, chat=None) -> web.Application:
+    bridge = Bridge(cfg, agents, transcriber, desktop, chat)
     internal_secret = secrets.token_urlsafe(24)
     host = "127.0.0.1" if cfg.host in ("", "0.0.0.0", "::") else cfg.host
-    agent.approval = (f"http://{host}:{cfg.port}/internal/permission", internal_secret)
+    bridge.agent.approval = (f"http://{host}:{cfg.port}/internal/permission", internal_secret)
     app = web.Application(
         middlewares=[_auth_middleware(cfg.token, internal_secret)], client_max_size=4 * 1024 * 1024
     )
@@ -402,6 +499,11 @@ def create_app(cfg: Config, agent, transcriber, desktop) -> web.Application:
             web.post("/api/jobs/{id}/cancel", bridge.cancel),
             web.get("/api/sessions", bridge.sessions),
             web.post("/api/sessions/select", bridge.select_session),
+            web.get("/api/windows", bridge.windows),
+            web.post("/api/windows/select", bridge.select_window),
+            web.post("/api/input", bridge.input),
+            web.get("/api/commands", bridge.commands),
+            web.post("/api/commands/run", bridge.run_command),
             web.post("/internal/permission", bridge.permission),
         ]
     )

@@ -11,7 +11,8 @@ from pathlib import Path
 from aiohttp import web
 
 from . import __version__
-from .agent import ClaudeAgent
+from .agent import AgentError, ClaudeAgent, CodexAgent
+from .pc import WindowChat
 from .config import DEFAULT_CONFIG_PATH, load
 from .desktop import DesktopTyper
 from .discovery import start_discovery
@@ -35,7 +36,12 @@ async def main_async(args) -> None:
     cfg = load(Path(args.config))
     transcriber = Transcriber(cfg)
     agent = ClaudeAgent(cfg)
-    app = create_app(cfg, agent, transcriber, DesktopTyper(cfg))
+    agents = {"claude": agent}
+    try:
+        agents["codex"] = CodexAgent(cfg)
+    except AgentError as exc:
+        log.warning("codex agent disabled: %s", exc)
+    app = create_app(cfg, agents, transcriber, DesktopTyper(cfg), WindowChat(cfg))
 
     if not args.no_preload:
         log.info("loading speech model (first run downloads it)...")
@@ -50,6 +56,8 @@ async def main_async(args) -> None:
     for addr in lan_addresses():
         log.info("  LAN: http://%s:%d", addr, cfg.port)
     log.info("claude: %s  workdir: %s  permission_mode: %s", agent.bin, cfg.workdir, cfg.permission_mode)
+    if "codex" in agents:
+        log.info("codex: %s  sandbox: %s", agents["codex"].bin, cfg.codex_sandbox)
     log.info("config: %s", Path(args.config).resolve())
     try:
         await asyncio.Event().wait()

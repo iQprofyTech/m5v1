@@ -14,7 +14,8 @@ void cfgLoad() {
   gCfg.token = p.getString("token", "");
   gCfg.lanUrl = p.getString("lan", "");
   gCfg.remoteUrl = p.getString("remote", "");
-  gCfg.mode = static_cast<Mode>(p.getUChar("mode", 0) ? 1 : 0);
+  uint8_t mode = p.getUChar("mode", 0);
+  gCfg.mode = static_cast<Mode>(mode < kModeCount ? mode : 0);
   String wifiJson = p.getString("wifi", "[]");
   p.end();
 
