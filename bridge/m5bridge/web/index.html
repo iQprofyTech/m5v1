@@ -96,7 +96,7 @@
 <main id="app">
   <section class="card" id="stage">
     <h2>Поток команды</h2>
-    <svg id="flow" viewBox="0 0 960 520" aria-label="Схема: Cardputer, мост, агенты">
+    <svg id="flow" viewBox="0 0 1070 520" aria-label="Схема: Cardputer, мост, агенты">
       <defs>
         <radialGradient id="core" cx="50%" cy="50%" r="50%">
           <stop offset="0" stop-color="#36e4ff" stop-opacity=".95" />
@@ -245,7 +245,7 @@
   }
   function ago(t, now) { var s = Math.max(0, Math.round(now - t)); return s < 60 ? s + " с" : s < 3600 ? Math.round(s / 60) + " мин" : Math.round(s / 3600) + " ч"; }
   function render(data) {
-    $("bridge-name").textContent = data.name + " · v" + data.version;
+    $("bridge-name").textContent = data.version ? data.name + " · v" + data.version : data.name;
     var dev = data.device || {}, fresh = dev.t && data.now - dev.t < 20;
     $("dev-dot").className = "dot " + (fresh ? "on" : dev.t ? "off" : "");
     $("dev-text").textContent = dev.t ? "Cardputer: " + (fresh ? "на связи" : "был " + ago(dev.t, data.now) + " назад") + (dev.ip ? " · " + dev.ip : "") : "Cardputer: ещё не подключался";
