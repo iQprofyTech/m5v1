@@ -121,7 +121,7 @@ class Bridge:
                 job.transcript = text
 
             job.state = "running"
-            if job.mode == "desktop":
+            if job.mode == "desktop" or self.cfg.agent_backend == "desktop":
                 since = time.time()
                 await self.desktop.send(text)
                 job.reply = "Отправлено в Claude Desktop"

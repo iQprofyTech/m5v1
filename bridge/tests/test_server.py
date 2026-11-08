@@ -162,6 +162,17 @@ async def test_voice_agent_cancel_while_confirming(confirm_client, parts):
     assert parts[1].prompts == []
 
 
+async def test_desktop_backend_routes_agent_mode(aiohttp_client, parts):
+    cfg, agent, transcriber, desktop = parts
+    cfg.agent_backend = "desktop"
+    client = await aiohttp_client(create_app(cfg, agent, transcriber, desktop))
+    resp = await client.post("/api/text", json={"text": "статус", "mode": "agent"}, headers=AUTH)
+    job = await wait_job(client, (await resp.json())["job"])
+    assert job["state"] == "done"
+    assert desktop.sent == ["статус"]
+    assert agent.prompts == []
+
+
 def test_pcm_resample_and_normalise():
     pcm = (np.ones(8000) * 4000).astype("<i2").tobytes()
     audio = pcm16_to_float(pcm, 8000)

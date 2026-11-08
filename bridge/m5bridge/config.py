@@ -51,6 +51,7 @@ ask_permissions = true    # tools not listed above are asked about on the Cardpu
 timeout_sec = 900
 max_reply_chars = 3000
 proxy = "auto"            # auto = Windows system proxy (e.g. Hiddify) / none / http://host:port
+backend = "cli"           # cli = claude -p in workdir; desktop = AGENT mode also goes to Claude Code in Claude Desktop
 
 [desktop]
 window_title = "Claude"   # title of the Claude Desktop window to type into
@@ -83,6 +84,7 @@ class Config:
     agent_timeout: int = 900
     max_reply_chars: int = 3000
     proxy: str = "auto"
+    agent_backend: str = "cli"  # "cli" or "desktop"
 
     desktop_window_title: str = "Claude"
     desktop_press_enter: bool = True
@@ -131,6 +133,7 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         agent_timeout=int(agent.get("timeout_sec", 900)),
         max_reply_chars=int(agent.get("max_reply_chars", 3000)),
         proxy=str(agent.get("proxy", "auto")),
+        agent_backend=str(agent.get("backend", "cli")),
         desktop_window_title=desktop.get("window_title", "Claude"),
         desktop_press_enter=bool(desktop.get("press_enter", True)),
         state_path=path.parent / "state.json",
