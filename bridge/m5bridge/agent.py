@@ -43,20 +43,33 @@ _STEP_ARG = {
 }
 
 
+def describe_tool(name: str, args) -> str:
+    """'Bash: git status', 'Gmail: list_drafts' — short enough for the Cardputer screen."""
+    name = str(name or "?")
+    if name.startswith("mcp__"):
+        # mcp__claude_ai_Gmail__list_drafts -> Gmail: list_drafts
+        server, _, tool = name[5:].partition("__")
+        server = server.removeprefix("claude_ai_").removeprefix("plugin_")
+        text = f"{server}: {tool}" if tool else server
+    else:
+        arg = args.get(_STEP_ARG.get(name, ""), "") if isinstance(args, dict) else ""
+        text = f"{name}: {arg}" if arg else name
+    return " ".join(str(text).split())[:160]
+
+
 def describe_steps(event: dict) -> list[str]:
     """One short line per tool call in a stream-json event, e.g. 'Bash: git status'."""
     if event.get("type") != "assistant":
         return []
-    steps = []
-    for block in event.get("message", {}).get("content", []):
-        if block.get("type") != "tool_use":
-            continue
-        name = str(block.get("name", "?"))
-        args = block.get("input") or {}
-        arg = args.get(_STEP_ARG.get(name, ""), "") if isinstance(args, dict) else ""
-        text = f"{name}: {arg}" if arg else name
-        steps.append(" ".join(str(text).split())[:160])
-    return steps
+    return [
+        describe_tool(block.get("name"), block.get("input") or {})
+        for block in event.get("message", {}).get("content", [])
+        if block.get("type") == "tool_use"
+    ]
+
+
+APPROVAL_TOOL = "mcp__m5__approve"
+BRIDGE_DIR = Path(__file__).resolve().parent.parent
 
 
 class AgentError(Exception):
@@ -152,6 +165,8 @@ class ClaudeAgent:
         self.current: str | None = None
         self._proc: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
+        # (url, secret) of the bridge's permission endpoint; set by create_app.
+        self.approval: tuple[str, str] | None = None
         self._load_state()
 
     # --- persistent state -------------------------------------------------
@@ -205,11 +220,31 @@ class ClaudeAgent:
             cmd += ["--disallowedTools", ",".join(self.cfg.disallowed_tools)]
         for extra in self.cfg.add_dirs:
             cmd += ["--add-dir", extra]
+        if self.approval and self.cfg.ask_permissions:
+            # Tools that are neither allowed nor denied are asked about on the Cardputer
+            # instead of being refused because nobody can click "Allow" on the PC.
+            url, secret = self.approval
+            server = {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": ["-m", "m5bridge.approval_mcp"],
+                "env": {
+                    "M5_APPROVAL_URL": url,
+                    "M5_APPROVAL_SECRET": secret,
+                    "PYTHONPATH": str(BRIDGE_DIR),
+                    "PYTHONIOENCODING": "utf-8",
+                },
+            }
+            cmd += ["--mcp-config", json.dumps({"mcpServers": {"m5": server}})]
+            cmd += ["--permission-prompt-tool", APPROVAL_TOOL]
         if resume:
             if not SESSION_ID_RE.match(resume):
                 raise AgentError("bad session id")
             cmd += ["--resume", resume]
         return cmd
+
+    def audit(self, text: str) -> None:
+        self._audit(text)
 
     def _audit(self, text: str) -> None:
         """Append to bridge/logs/agent.log: every prompt, tool call and result, readable as text."""

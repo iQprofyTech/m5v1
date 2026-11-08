@@ -12,6 +12,11 @@ BRIDGE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = BRIDGE_DIR / "config.toml"
 DEFAULT_STATE_PATH = BRIDGE_DIR / "state.json"
 
+DEFAULT_SPEECH_PROMPT = (
+    "Команды для Claude Code на компьютере: проверь почту, черновики, календарь, Google Drive, "
+    "открой проект, git status, коммит, сделай ревью, запусти тесты, лендинг, Cardputer."
+)
+
 TEMPLATE = """\
 # M5 Cardputer bridge config. Keep this file private: the token grants control of this PC.
 
@@ -27,6 +32,8 @@ model = "small"           # faster-whisper model: tiny / base / small / medium /
 device = "auto"           # auto / cpu / cuda
 compute_type = "int8"
 language = "ru"
+# Words whisper should expect (names, commands); helps with "черновики", "Claude", "git"...
+prompt = "{speech_prompt}"
 
 [agent]
 claude_bin = ""           # empty = find claude / claude.exe automatically
@@ -40,6 +47,7 @@ permission_mode = "default"   # default / acceptEdits / plan / bypassPermissions
 allowed_tools = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
 disallowed_tools = []     # always refused, e.g. ["Bash(rm -rf:*)", "Bash(git push --force:*)"]
 confirm_voice = true      # voice commands wait for Enter on the Cardputer before the agent runs
+ask_permissions = true    # tools not listed above are asked about on the Cardputer (Enter/A/Esc)
 timeout_sec = 900
 max_reply_chars = 3000
 proxy = "auto"            # auto = Windows system proxy (e.g. Hiddify) / none / http://host:port
@@ -62,6 +70,7 @@ class Config:
     whisper_device: str = "auto"
     whisper_compute: str = "int8"
     language: str = "ru"
+    speech_prompt: str = ""
 
     claude_bin: str = ""
     workdir: str = field(default_factory=lambda: str(Path.home()))
@@ -70,6 +79,7 @@ class Config:
     disallowed_tools: list[str] = field(default_factory=list)
     add_dirs: list[str] = field(default_factory=list)
     confirm_voice: bool = True
+    ask_permissions: bool = True
     agent_timeout: int = 900
     max_reply_chars: int = 3000
     proxy: str = "auto"
@@ -85,6 +95,7 @@ def _write_template(path: Path) -> None:
         name=platform.node(),
         token=secrets.token_urlsafe(24),
         workdir=str(Path.home()).replace("\\", "\\\\"),
+        speech_prompt=DEFAULT_SPEECH_PROMPT,
     )
     path.write_text(text, encoding="utf-8")
 
@@ -108,6 +119,7 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         whisper_device=speech.get("device", "auto"),
         whisper_compute=speech.get("compute_type", "int8"),
         language=speech.get("language", "ru"),
+        speech_prompt=str(speech.get("prompt", DEFAULT_SPEECH_PROMPT)),
         claude_bin=agent.get("claude_bin", ""),
         workdir=agent.get("workdir") or str(Path.home()),
         permission_mode=agent.get("permission_mode", "default"),
@@ -115,6 +127,7 @@ def load(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         disallowed_tools=list(agent.get("disallowed_tools", [])),
         add_dirs=list(agent.get("add_dirs", [])),
         confirm_voice=bool(agent.get("confirm_voice", True)),
+        ask_permissions=bool(agent.get("ask_permissions", True)),
         agent_timeout=int(agent.get("timeout_sec", 900)),
         max_reply_chars=int(agent.get("max_reply_chars", 3000)),
         proxy=str(agent.get("proxy", "auto")),

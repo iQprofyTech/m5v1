@@ -60,6 +60,7 @@ class Transcriber:
             language=self.cfg.language or None,
             beam_size=5,
             vad_filter=True,
+            initial_prompt=self.cfg.speech_prompt or None,
         )
         return " ".join(s.text.strip() for s in segments).strip()
 

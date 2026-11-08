@@ -74,6 +74,8 @@ static void drawIdleInput() {
   if (!jobId.isEmpty()) {
     if (jobLastState == "confirm") {
       uiDrawInput("Enter - выполнить, Esc - отмена", TFT_YELLOW);
+    } else if (jobLastState == "approve") {
+      uiDrawInput("Enter-да  A-всегда  Esc-нет", TFT_YELLOW);
     } else if (jobLastState == "transcribing") {
       uiDrawInput("Распознаю речь...", TFT_CYAN);
     } else if (!jobActivity.isEmpty()) {
@@ -93,6 +95,7 @@ static void showHelp() {
   uiDrawLines("Клавиши (любая - назад)", {
       "G0 удерж. / Fn+Space - голос",
       "Enter - отправить / подтвердить",
+      "Запрос агента: Enter/A/Esc",
       "Tab - режим Agent/Desktop",
       "Fn+; Fn+. - прокрутка",
       "Fn+N новая сессия, Fn+L список",
@@ -106,6 +109,21 @@ static void backToMain() {
   uiDrawLog();
   drawIdleInput();
   drawStatus();
+}
+
+// --- sound ------------------------------------------------------------------
+
+// Short tones so the device can stay in a pocket: the agent needs an answer, or finished.
+// The speaker shares the codec with the mic, so it is only switched on for the beep.
+static void beep(uint16_t freq, uint32_t ms, int times = 1) {
+  if (recording) return;
+  M5Cardputer.Speaker.begin();
+  M5Cardputer.Speaker.setVolume(90);
+  for (int i = 0; i < times; ++i) {
+    M5Cardputer.Speaker.tone(freq, ms);
+    delay(ms + 60);
+  }
+  M5Cardputer.Speaker.end();
 }
 
 // --- connection -------------------------------------------------------------
@@ -207,14 +225,22 @@ static void pollJob() {
     redraw = true;
   }
   jobStepsShown = std::max(jobStepsShown, stepCount);
+  if (state == "approve" && jobLastState != "approve") {
+    uiLogAdd(TFT_YELLOW, "? Разрешить: " + doc["approval"].as<String>());
+    beep(1760, 70, 2);
+  } else if (state == "confirm" && jobLastState != "confirm") {
+    beep(1320, 60);
+  }
   if (redraw) {
     jobLastState = state;
     drawIdleInput();
   }
   if (state == "done") {
     uiLogAdd(TFT_WHITE, doc["reply"].as<String>());
+    beep(1047, 90);
   } else if (state == "error") {
     uiLogAdd(TFT_RED, "Ошибка: " + doc["error"].as<String>());
+    beep(330, 250);
   } else if (state == "cancelled") {
     uiLogAdd(TFT_ORANGE, "Отменено");
   } else {
@@ -233,6 +259,24 @@ static void confirmJob() {
     drawIdleInput();
   } else {
     uiLogAdd(TFT_RED, "Не удалось подтвердить: " + String(code));
+  }
+}
+
+// Answer the agent's permission question: allow once, allow this tool until the bridge
+// restarts (always), or deny.
+static void approveJob(bool allow, bool always) {
+  JsonDocument doc;
+  doc["allow"] = allow;
+  doc["always"] = always;
+  String body, resp;
+  serializeJson(doc, body);
+  int code = apiRequest("POST", "/api/jobs/" + jobId + "/approve", body, resp);
+  if (code == 200) {
+    uiLogAdd(allow ? TFT_GREEN : TFT_ORANGE, allow ? (always ? "Разрешено всегда" : "Разрешено") : "Запрещено");
+    jobLastState = "running";
+    drawIdleInput();
+  } else {
+    uiLogAdd(TFT_RED, "Не удалось ответить: " + String(code));
   }
 }
 
@@ -479,7 +523,11 @@ static void handleMainKeys(const Keyboard_Class::KeysState& k) {
     } else if (hasChar(k, '.')) {
       uiLogScroll(-3);
     } else if (hasChar(k, '`')) {
-      cancelJob();
+      if (!jobId.isEmpty() && jobLastState == "approve") {
+        approveJob(false, false);  // Esc on a question denies it; a second Esc cancels the job
+      } else {
+        cancelJob();
+      }
     } else if (hasChar(k, 'n')) {
       selectSession("");
     } else if (hasChar(k, 'l')) {
@@ -507,6 +555,16 @@ static void handleMainKeys(const Keyboard_Class::KeysState& k) {
   if (k.enter && !jobId.isEmpty() && jobLastState == "confirm" && input.isEmpty()) {
     confirmJob();
     return;
+  }
+  if (!jobId.isEmpty() && jobLastState == "approve" && input.isEmpty()) {
+    if (k.enter) {
+      approveJob(true, false);
+      return;
+    }
+    if (hasChar(k, 'a') || hasChar(k, 'A')) {
+      approveJob(true, true);
+      return;
+    }
   }
   if (k.enter) {
     String text = input;

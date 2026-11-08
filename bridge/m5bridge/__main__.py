@@ -63,11 +63,17 @@ def main() -> None:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     parser.add_argument("--no-preload", action="store_true", help="load the speech model on first use")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--log-file", help="write the log here instead of the console (for autostart)")
     args = parser.parse_args()
+    handlers = None
+    if args.log_file:
+        Path(args.log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers = [logging.FileHandler(args.log_file, encoding="utf-8")]
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        datefmt="%Y-%m-%d %H:%M:%S" if args.log_file else "%H:%M:%S",
+        handlers=handlers,
     )
     try:
         asyncio.run(main_async(args))
