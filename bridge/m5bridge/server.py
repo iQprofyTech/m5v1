@@ -131,6 +131,8 @@ class Bridge:
                     reply = await wait_reply(text, since, on_step=job.steps.append)
                     if reply is None:
                         job.reply = "Отправлено в Claude Desktop (ответ не найден: открыт чат, а не Claude Code?)"
+                    elif not reply:
+                        job.reply = "Отправлено в Claude Desktop, но ответа нет: сессия была занята другой задачей"
                     else:
                         job.reply = self._clip(reply or "(пустой ответ)")
                         self._audit(f"  = [desktop] {reply}")
@@ -146,7 +148,7 @@ class Bridge:
                 job.session = result.session_id
                 job.reply = self._clip(result.text or "(пустой ответ)")
                 if result.is_error:
-                    job.state, job.error = "error", job.reply
+                    job.state, job.error = "error", _explain_agent_error(job.reply)
                     return
             job.state = "done"
         except AgentCancelled:
@@ -330,6 +332,18 @@ class Bridge:
             except AgentError as exc:
                 raise web.HTTPNotFound(text=str(exc))
         return web.json_response({"ok": True, "session": self.agent.current or ""})
+
+
+def _explain_agent_error(text: str) -> str:
+    """Short, actionable text for the 240x135 screen instead of a raw API error."""
+    if "Verification Portal" in text or "can't receive replies" in text:
+        return (
+            "Консольный Claude Code заблокирован для этого аккаунта: нужна проверка на "
+            "portal.anthropic.com/verify. Пока работает режим DESK (Tab)."
+        )
+    if "Not logged in" in text or "/login" in text:
+        return "Консольный Claude Code не авторизован: выполните на ПК claude auth login"
+    return text
 
 
 def _is_loopback(addr: str | None) -> bool:

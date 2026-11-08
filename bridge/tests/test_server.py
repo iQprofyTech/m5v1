@@ -173,6 +173,23 @@ async def test_desktop_backend_routes_agent_mode(aiohttp_client, parts):
     assert agent.prompts == []
 
 
+async def test_account_block_is_explained(client, parts):
+    agent = parts[1]
+
+    async def blocked(prompt, new_session=False, on_step=None):
+        return AgentResult(
+            text="API Error: Your account can't receive replies from Claude right now. Verification Portal: ...",
+            session_id="",
+            is_error=True,
+        )
+
+    agent.run = blocked
+    resp = await client.post("/api/text", json={"text": "x", "mode": "agent"}, headers=AUTH)
+    job = await wait_job(client, (await resp.json())["job"])
+    assert job["state"] == "error"
+    assert "DESK" in job["error"] and "portal.anthropic.com/verify" in job["error"]
+
+
 def test_pcm_resample_and_normalise():
     pcm = (np.ones(8000) * 4000).astype("<i2").tobytes()
     audio = pcm16_to_float(pcm, 8000)
