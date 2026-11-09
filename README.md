@@ -1,5 +1,7 @@
 # m5v1 — голосовой пульт ПК и AI-агентов на M5Stack Cardputer-Adv
 
+![m5v1: голосовой ИИ-пульт для ПК](docs/img/banner.png)
+
 > **English:** m5v1 turns an **M5Stack Cardputer-Adv** into a pocket remote for a Windows PC. Speak or
 > type on the device and the PC bridge (local speech recognition with faster-whisper) can run
 > **Claude Code** or **OpenAI Codex** agents and show their actions and answers on the device, type into
@@ -36,6 +38,8 @@ Cardputer ──Wi-Fi──► мост на ПК (aiohttp :8765) ──► fast
 На этом ПК в шапке есть кнопки **Остановить / Запустить**, **Перезапустить** и переключатель
 **Автозапуск** (задача `m5bridge` в Планировщике заданий). Кнопка **Демо** показывает работу
 моста на примерах, без настоящих команд.
+
+![Панель моста в демо-режиме: команда «Создай макет в Figma» уходит агенту Claude](docs/img/panel.png)
 
 ## Документация
 
